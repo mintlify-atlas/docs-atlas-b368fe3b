@@ -81,11 +81,17 @@ end if
 
 ## Integration with ConnectivityTask
 
-The `ConnectivityTask` polls `GTV_HasInternet` on a timer (every `NET_RETRY_MS` = 30 000 ms) and updates `m.global.isOnline`. The flow is:
+The `ConnectivityTask` calls `GTV_HasInternet` on a fixed 10-second loop (hardcoded `interval = 10000` inside `RunConnectivityTask`) and updates both `m.global.hasInternet` and `m.global.isOnline`.
 
-1. `ConnectivityTask` calls `GTV_HasInternet(m.global.activeServer)`.
-2. If `false`, it sets `m.global.isOnline = false` and shows the offline dialog.
-3. When `true` again, it restores `m.global.isOnline = true` and triggers a reconnect.
+<Note>
+`NET_RETRY_MS = 30 000` is a separate AppConstants value used by error dialogs and retry logic elsewhere in the app — it is **not** the ConnectivityTask polling interval.
+</Note>
+
+The flow is:
+
+1. `ConnectivityTask` calls `GTV_PingServer(m.global.activeServer)` (via `DoCheck()`).
+2. If `false`, it sets `m.global.hasInternet = false` and `m.global.isOnline = GTV_IsOnline()`.
+3. When `true` again, it sets `m.global.hasInternet = true`.
 
 ---
 

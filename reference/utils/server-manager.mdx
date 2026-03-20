@@ -211,7 +211,7 @@ active = GTV_FindActiveServer(lastServer)
 if active = ""
     GTV_Error("Startup", "No server reachable")
 else
-    m.global.setField("activeServer", active)
+    m.global.activeServer = active
 end if
 ```
 

@@ -7,36 +7,35 @@ GlobalTV is a live-TV channel built with **BrightScript** and **SceneGraph XML**
 
 ## Directory structure
 
-<Tree>
-  <Tree.Folder name="source" defaultOpen>
-    <Tree.File name="main.brs" />
-    <Tree.File name="AppConstants.brs" />
-    <Tree.File name="AppState.brs" />
-    <Tree.Folder name="utils" defaultOpen>
-      <Tree.File name="Logger.brs" />
-      <Tree.File name="RegistryManager.brs" />
-      <Tree.File name="ServerManager.brs" />
-      <Tree.File name="HttpClient.brs" />
-      <Tree.File name="HealthCheck.brs" />
-      <Tree.File name="NetworkDetector.brs" />
-    </Tree.Folder>
-  </Tree.Folder>
-  <Tree.Folder name="components" defaultOpen>
-    <Tree.File name="MainScene.xml" />
-    <Tree.File name="MainScene.brs" />
-    <Tree.Folder name="SplashScreen" />
-    <Tree.Folder name="OnboardingScreen" />
-    <Tree.Folder name="LoginScreen" />
-    <Tree.Folder name="MainScreen" />
-    <Tree.Folder name="PlayerScreen" />
-    <Tree.Folder name="SettingsScreen" />
-    <Tree.Folder name="tasks" />
-    <Tree.Folder name="ads" />
-    <Tree.Folder name="overlays" />
-  </Tree.Folder>
-  <Tree.File name="manifest" />
-  <Tree.File name="Makefile" />
-</Tree>
+```text
+GlobalTV_Roku/
+├── manifest
+├── Makefile
+├── source/
+│   ├── main.brs
+│   ├── AppConstants.brs
+│   ├── AppState.brs
+│   └── utils/
+│       ├── Logger.brs
+│       ├── RegistryManager.brs
+│       ├── ServerManager.brs
+│       ├── HttpClient.brs
+│       ├── HealthCheck.brs
+│       └── NetworkDetector.brs
+├── components/
+│   ├── MainScene.xml
+│   ├── MainScene.brs
+│   ├── SplashScreen/
+│   ├── OnboardingScreen/
+│   ├── LoginScreen/
+│   ├── MainScreen/
+│   ├── PlayerScreen/
+│   ├── SettingsScreen/
+│   ├── tasks/
+│   ├── ads/
+│   └── overlays/
+└── images/
+```
 
 ### `source/` vs `components/`
 
@@ -127,7 +126,7 @@ m.sessionAuthTimer.observeField("fire", "OnSessionAuthTimer")
 
 ## Technology stack
 
-<Columns cols={2}>
+<CardGroup cols={2}>
   <Card title="BrightScript" icon="code">
     Roku's scripting language. Used for all logic in both `source/` and `components/` `.brs` files.
   </Card>
@@ -140,7 +139,7 @@ m.sessionAuthTimer.observeField("fire", "OnSessionAuthTimer")
   <Card title="Makefile" icon="terminal">
     Build tooling: `make zip` packages the channel, `make install` sideloads it to a device via the Roku Developer Application Installer.
   </Card>
-</Columns>
+</CardGroup>
 
 <Note>
 The `manifest` file declares the channel version, splash screens, supported resolutions, and `supports_input_launch=1` (required for deep-link input events).

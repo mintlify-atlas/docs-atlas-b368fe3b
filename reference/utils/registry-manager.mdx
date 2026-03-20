@@ -139,7 +139,8 @@ Deletes both `username` and `password` keys from the registry. Use this on logou
 ```brightscript
 ' On logout
 GTV_RegClearCredentials()
-m.global.setField("authState", "logged_out")
+GTV_RegClearCache()
+m.global.isAuthenticated = false
 ```
 
 ---
