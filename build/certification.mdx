@@ -1,0 +1,143 @@
+---
+title: Roku certification checklist
+description: Requirements for passing Roku Channel Store certification, and how to verify them with make check.
+---
+
+Roku's certification review checks that your channel meets specific technical and UX requirements before it can be published. This page covers every requirement tracked by `make check`, plus items that require real hardware testing.
+
+<Note>
+`make check` is a development aid. It does not replace Roku's official certification review. Always verify on real hardware before submitting.
+</Note>
+
+## Run the automated check
+
+```bash
+make check
+```
+
+This scans your local project files and prints a pass/fail result for each item. Fix all failures before submitting to the Channel Store.
+
+## Manifest fields
+
+All of the following fields must be present in the `manifest` file. `make check` verifies each one.
+
+| Field | Required value | Current value |
+|---|---|---|
+| `title` | Non-empty string | `GlobalTV` |
+| `major_version` | Integer ≥ 1 | `1` |
+| `minor_version` | Integer | `0` |
+| `build_version` | Integer, unique per submission | `6` |
+| `mm_icon_focus_hd` | `pkg:/images/logo-hd.png` | `pkg:/images/logo-hd.png` |
+| `mm_icon_focus_fhd` | `pkg:/images/logo-fhd.png` | `pkg:/images/logo-fhd.png` |
+| `splash_screen_fhd` | `pkg:/images/splash_fhd.png` | `pkg:/images/splash_fhd.png` |
+| `splash_screen_hd` | `pkg:/images/splash_hd.png` | `pkg:/images/splash_hd.png` |
+| `splash_screen_sd` | `pkg:/images/splash_sd.png` | `pkg:/images/splash_sd.png` |
+| `ui_resolutions` | Must include `fhd` | `fhd,hd` |
+| `rsg_version` | `1.2` or later | `1.3` |
+| `supports_input_launch` | `1` | `1` |
+| `splash_rsg_optimization` | `1` | `1` |
+| `splash_color` | Hex color string | `#1a1a2e` |
+| `splash_min_time` | Milliseconds | `1500` |
+
+<Tip>
+Increment `build_version` before every Channel Store submission. Roku rejects packages with a `build_version` identical to a previous submission.
+</Tip>
+
+## Required images
+
+These files must exist at the specified paths. `make check` verifies each one.
+
+| File | Purpose |
+|---|---|
+| `images/logo-hd.png` | Channel store icon (HD) |
+| `images/logo-fhd.png` | Channel store icon (FHD) |
+| `images/splash-fhd.png` | Splash screen (1920×1080) |
+| `images/splash-hd.png` | Splash screen (1280×720) |
+| `images/splash-sd.png` | Splash screen (720×480) |
+| `images/globaltv-logo.png` | In-app logo |
+
+## Prohibited patterns
+
+`make check` scans all files in `source/` and `components/` for these patterns and fails if any are found.
+
+<AccordionGroup>
+  <Accordion title="eval() — prohibited in all Roku channels">
+    Roku's certification process rejects any channel that calls `eval()`. The function is not supported in BrightScript and its presence causes an automatic certification failure.
+
+    `make check` runs:
+
+    ```bash
+    grep -r "eval(" source/ components/
+    ```
+
+    If any matches are found, the build fails.
+  </Accordion>
+
+  <Accordion title="file:// — must use pkg:/ instead">
+    File system access via `file://` URIs is not allowed. Use `pkg:/` to reference assets bundled in the channel zip.
+
+    Correct:
+
+    ```brightscript
+    m.image.uri = "pkg:/images/logo-hd.png"
+    ```
+
+    Incorrect:
+
+    ```brightscript
+    m.image.uri = "file:///images/logo-hd.png"
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## AppLaunchComplete beacon
+
+Roku requires channels to signal when the app is fully launched and interactive. This is done by calling `signalBeacon` with `AppLaunchComplete` in `MainScreen`.
+
+`make check` verifies:
+
+```bash
+grep -r "signalBeacon" components/MainScreen/ | grep "AppLaunchComplete"
+```
+
+The beacon must be fired **after** the main content UI is ready and displayed — not at scene creation or splash screen completion. Firing it too early causes a certification failure.
+
+## Deep link support
+
+Because `supports_input_launch=1` is set in the manifest, the channel must handle deep link inputs. `make check` verifies these patterns exist in `source/main.brs`:
+
+| Pattern | Requirement |
+|---|---|
+| `roInput` | Message port must listen for `roInput` object |
+| `roInputEvent` | Must handle `roInputEvent` messages |
+| `launchDeepLink` or `inputDeepLink` | Must process deep link parameters (checklist item 8.1) |
+
+The channel currently supports `mediaType=live` deep links, processed via both `launchDeepLink` and `inputDeepLink` handlers in `source/main.brs`.
+
+## OPTIONS key handling
+
+Certification checklist item 9.1 requires that channels do not intercept the OPTIONS key in contexts where Roku's standard behavior should apply. In `PlayerScreen`, any OPTIONS key handling must return `false` to allow Roku to process the key normally.
+
+`make check` warns (but does not fail) if the string `options` is found in `components/PlayerScreen/PlayerScreen.brs`. Review that code to confirm the key is handled correctly.
+
+## Items requiring real hardware testing
+
+`make check` cannot verify the following. Test these manually on a real Roku device before submitting.
+
+<AccordionGroup>
+  <Accordion title="Launch performance">
+    Roku measures the time from launch to the `AppLaunchComplete` beacon. Channels that take too long to reach an interactive state may fail certification. Test on a mid-range Roku device (not only high-end hardware).
+  </Accordion>
+
+  <Accordion title="Voice keyboard for password entry">
+    The login screen must support Roku's voice keyboard for password input. Verify this works end-to-end on a device with a voice-enabled remote.
+  </Accordion>
+
+  <Accordion title="Deep link end-to-end">
+    Test that `mediaType=live` deep links launch the correct channel and start playback. Use the Roku Remote app or `curl` against the ECP endpoint to send a test deep link:
+
+    ```bash
+    curl -d '' 'http://<ROKU_IP>:8060/launch/dev?mediaType=live&contentId=<channelId>'
+    ```
+  </Accordion>
+</AccordionGroup>

@@ -1,0 +1,91 @@
+---
+title: "GlobalTV Roku"
+description: "A Roku SceneGraph channel app for live TV streaming with authentication, playlist management, ads, and deep linking."
+---
+
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Get the app running on your Roku device in minutes
+  </Card>
+  <Card title="Architecture" icon="sitemap" href="/architecture/overview">
+    Understand how the app is structured and how screens interact
+  </Card>
+  <Card title="Build & Deploy" icon="hammer" href="/build/makefile-targets">
+    Package, sideload, and publish to the Roku Channel Store
+  </Card>
+  <Card title="Reference" icon="code" href="/reference/tasks/auth-task">
+    Full reference for tasks, utilities, ad formats, and overlays
+  </Card>
+</CardGroup>
+
+## What is GlobalTV Roku?
+
+GlobalTV Roku is a **Roku SceneGraph channel** that delivers live TV streaming to Roku devices. It handles the full user journey — from splash screen and onboarding through authentication, channel browsing, live video playback, and ad delivery — all built in BrightScript and SceneGraph XML.
+
+**Version:** 1.0.6
+
+## Key features
+
+<CardGroup cols={2}>
+  <Card title="Live TV streaming" icon="tv">
+    Streams live channels via M3U/HLS playlists loaded from a configurable backend
+  </Card>
+  <Card title="On-device authentication" icon="lock">
+    Roku-compliant on-device login with auto-login using persisted credentials
+  </Card>
+  <Card title="Ad system" icon="rectangle-ad">
+    Three ad display formats (A, B, C) with polling, impression tracking, and viewport adjustment
+  </Card>
+  <Card title="Channel grid" icon="table-cells">
+    Category-aware channel grid with number overlay and channel banner
+  </Card>
+  <Card title="Deep linking" icon="link">
+    Supports `mediaType=live` deep links via both launch and input events
+  </Card>
+  <Card title="Connectivity monitoring" icon="wifi">
+    Periodic connectivity polling with graceful offline/online state transitions
+  </Card>
+  <Card title="Settings panel" icon="gear">
+    Safe-area settings, server management, channel refresh, and logout
+  </Card>
+  <Card title="Certification ready" icon="certificate">
+    Meets Roku Channel Store certification requirements out of the box
+  </Card>
+</CardGroup>
+
+## Project structure
+
+```text
+manifest              ← Channel metadata and splash config
+Makefile              ← Build, sideload, packaging, and certification targets
+source/
+  main.brs            ← Entry point, roSGScreen setup, deep link handling
+  AppConstants.brs    ← Central config: endpoints, timeouts, colors, flags
+  AppState.brs        ← Global state initialization (m.global fields)
+  utils/              ← Logger, HTTP client, M3U parser, registry, server manager
+components/
+  MainScene.*         ← Root scene: auth flow, screen coordination
+  SplashScreen/       ← Startup splash display
+  OnboardingScreen/   ← First-run onboarding
+  LoginScreen/        ← User/password capture and Roku on-device auth
+  MainScreen/         ← Channel grid and category browsing
+  PlayerScreen/       ← Live stream playback with overlay and ad integration
+  SettingsScreen/     ← Configuration, server panel, logout
+  tasks/              ← Background tasks: auth, playlist, ads, connectivity
+  ads/                ← Ad manager and format renderers (A, B, C)
+  overlays/           ← Channel banner, number overlay, dialogs
+images/               ← Icons, splash screens
+out/                  ← Build output (ZIP, PKG, screenshots)
+```
+
+## How the app flows
+
+1. **Launch** — `main.brs` creates `roSGScreen`, instantiates `MainScene`, and processes any deep links
+2. **Splash** — `SplashScreen` displays while initial setup runs
+3. **Auth check** — `MainScene` checks for saved credentials; shows `OnboardingScreen` or auto-logins
+4. **Main content** — `MainScreen` loads the channel grid and fires `AppLaunchComplete`
+5. **Playback** — `PlayerScreen` streams the selected live channel with overlay and ad support
+
+<Note>
+GlobalTV Roku requires a compatible backend that provides health, handshake, auth, and playlist endpoints. See [AppConstants](/configuration/app-constants) for endpoint configuration.
+</Note>

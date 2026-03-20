@@ -1,0 +1,169 @@
+---
+title: Deep linking
+description: How GlobalTV Roku handles mediaType=live deep links at launch and while the app is running.
+---
+
+GlobalTV Roku supports Roku deep linking with `mediaType=live`. A deep link carries a `contentId` that maps to a channel number in the loaded playlist.
+
+## Supported format
+
+| Parameter | Required | Value |
+|---|---|---|
+| `mediaType` | Yes | Must be `"live"` (case-insensitive) |
+| `contentId` | Yes | Channel number as a string (e.g., `"101"`) |
+
+Only `mediaType=live` links are recognized. Any other `mediaType` value is ignored.
+
+## Validation
+
+`GTV_IsLiveDeepLink()` in `main.brs` validates both parameters:
+
+```brightscript
+function GTV_IsLiveDeepLink(link as Dynamic) as Boolean
+    if link = invalid then return false
+    if link.contentId = invalid or link.mediaType = invalid then return false
+
+    mediaType = LCase(link.mediaType.ToStr())
+    contentId = link.contentId.ToStr()
+
+    if mediaType <> "live" then return false
+    if contentId = "" then return false
+    return true
+end function
+```
+
+## Entry point 1: launch deep link (cold start)
+
+When the app is launched with a deep link payload in the `args` parameter, `main.brs` detects it and passes it to the scene:
+
+```brightscript
+sub Main(args as Dynamic)
+    ...
+    scene = screen.CreateScene("MainScene")
+    ...
+    if args <> invalid
+        if GTV_IsLiveDeepLink(args)
+            scene.launchDeepLink = args
+        end if
+    end if
+    ...
+end sub
+```
+
+`MainScene` observes `launchDeepLink` and stores it as a pending link:
+
+```brightscript
+sub onLaunchDeepLink()
+    link = m.top.launchDeepLink
+    if link = invalid then return
+    if not IsLiveDeepLinkPayload(link)
+        GTV_Warn("MainScene", "Cold-start deep link ignored (mediaType/contentId invalid)")
+        return
+    end if
+    GTV_Log("MainScene", "Cold-start deep link: contentId=" + link.contentId.ToStr())
+    m.pendingDeepLink = link
+end sub
+```
+
+The link is stored in `m.pendingDeepLink` and processed once the playlist is loaded.
+
+## Entry point 2: input deep link (warm start)
+
+While the app is running, Roku sends `roInputEvent` messages to the `roInput` object created in `main.brs`:
+
+```brightscript
+input = CreateObject("roInput")
+input.SetMessagePort(port)
+...
+else if type(msg) = "roInputEvent"
+    info = msg.GetInfo()
+    if info <> invalid
+        if GTV_IsLiveDeepLink(info)
+            scene.inputDeepLink = info
+        end if
+    end if
+```
+
+`MainScene` observes `inputDeepLink` and calls `ProcessDeepLink()` immediately:
+
+```brightscript
+sub onInputDeepLink()
+    link = m.top.inputDeepLink
+    if link = invalid then return
+    if not IsLiveDeepLinkPayload(link)
+        GTV_Warn("MainScene", "Warm-start deep link ignored (mediaType/contentId invalid)")
+        return
+    end if
+    GTV_Log("MainScene", "Warm-start deep link: contentId=" + link.contentId.ToStr())
+    ProcessDeepLink(link)
+end sub
+```
+
+## Processing a deep link
+
+`ProcessDeepLink()` resolves the `contentId` to a channel index and calls `ShowPlayer()`:
+
+```brightscript
+sub ProcessDeepLink(link as Object)
+    channels = m.global.channelList
+    if channels = invalid or channels.Count() = 0
+        m.pendingDeepLink = link   ' defer until playlist is ready
+        return
+    end if
+
+    idx = ResolveDeepLinkChannelIndex(link, channels)
+    if idx >= 0
+        GTV_Log("MainScene", "Deep link resolved to index " + idx.ToStr())
+        ShowPlayer(idx)
+        return
+    end if
+
+    GTV_Warn("MainScene", "Deep link: channel " + link.contentId.ToStr() + " not found - going to MainScreen")
+end sub
+```
+
+`contentId` is matched against `ch.contentId` in the channel list. Since `contentId` is set to `ch.number.ToStr()` during M3U parsing, a deep link with `contentId="101"` will match channel number 101.
+
+## Deferred resolution
+
+If a cold-start deep link arrives before the playlist has been loaded, `ProcessDeepLink()` stores it in `m.pendingDeepLink`. The link is processed in two places:
+
+**In `OnPlaylistDone()`** — immediately after the playlist loads:
+
+```brightscript
+if m.pendingDeepLink <> invalid
+    dl = m.pendingDeepLink
+    m.pendingDeepLink = invalid
+    dlIdx = ResolveDeepLinkChannelIndex(dl, res.channels)
+    if dlIdx >= 0
+        ShowPlayer(dlIdx)
+        return
+    end if
+    GTV_Warn("MainScene", "Startup deep link invalid - using startup channel policy")
+end if
+```
+
+**In `ShowMainScreen()`** — when the channel grid becomes ready:
+
+```brightscript
+if m.pendingDeepLink <> invalid
+    dl = m.pendingDeepLink
+    m.pendingDeepLink = invalid
+    ProcessDeepLink(dl)
+end if
+```
+
+## Summary
+
+<CardGroup cols={2}>
+  <Card title="Cold start" icon="power-off">
+    Deep link arrives in `Main(args)`. Stored as `scene.launchDeepLink`. Deferred until playlist is loaded, then resolves to a channel index and starts playback.
+  </Card>
+  <Card title="Warm start" icon="bolt">
+    Deep link arrives as `roInputEvent` while the app is running. Passed to `scene.inputDeepLink`. Resolved immediately if the channel list is available.
+  </Card>
+</CardGroup>
+
+<Tip>
+The `contentId` in the deep link must match a channel's `channel-number` attribute in the M3U playlist. If the channel is not found, the app navigates to `MainScreen` instead of playing.
+</Tip>

@@ -1,0 +1,189 @@
+---
+title: Ads
+description: How GlobalTV Roku polls for ads, reports impressions, and renders three ad display formats.
+---
+
+The ads subsystem runs in a dedicated background task (`AdsPollingTask`) that continuously polls a dedicated ad server, processes snapshots, and emits ad payloads to the player for rendering.
+
+## Configuration
+
+All ads constants are defined in `AppConstants.brs`:
+
+```brightscript
+ADS_API_BASE_URL      : "https://ads.globaltv.lat/api/v1"
+ADS_PATH_HANDSHAKE    : "/app/devices/handshake"
+ADS_PATH_ACTIVE       : "/app/ads/active"
+ADS_PATH_IMPRESSIONS  : "/app/impressions/events/batch"
+ADS_USE_DEDICATED     : true
+ADS_HANDSHAKE_ENABLED : true
+ADS_POLL_MS           : 10000
+```
+
+<Note>
+When `ADS_USE_DEDICATED = true`, the ads task uses `ADS_API_BASE_URL` (`https://ads.globaltv.lat/api/v1`) as its base URL instead of the main app server.
+</Note>
+
+## Handshake
+
+On startup, `AdsPollingTask` calls `TryAdsHandshake()` before beginning the polling loop. The handshake registers the device with the ad server:
+
+```brightscript
+sub TryAdsHandshake()
+    c = AppConstants()
+    if c.ADS_HANDSHAKE_ENABLED <> true then return
+    if c.ADS_USE_DEDICATED <> true then return
+
+    payload = {
+        platform     : c.PLATFORM
+        device_id    : deviceId
+        device_model : GTV_GetBrandedDeviceModel(di)
+        os_version   : GTV_AdsNormalizeOsVersion(di)
+        app_version  : GTV_GetAppVersion()
+    }
+    if subscriberIdentifier <> "" then payload.subscriber_identifier = subscriberIdentifier
+    if subscriberPassword <> "" then payload.subscriber_password = subscriberPassword
+
+    url = c.ADS_API_BASE_URL + c.ADS_PATH_HANDSHAKE
+    resp = GTV_HttpPost(url, FormatJson(payload), c.TIMEOUT_HTTP)
+    ...
+end sub
+```
+
+The handshake is a POST to:
+
+```text
+POST https://ads.globaltv.lat/api/v1/app/devices/handshake
+```
+
+If the primary path returns 404, the task falls back to `ADS_PATH_HANDSHAKE_FALLBACK` (empty string by default — no fallback configured).
+
+## Polling loop
+
+After the handshake, the task enters a `while true` loop with a `wait()` call:
+
+```brightscript
+nextIntervalMs = c.ADS_POLL_MS  ' 10000ms
+
+while true
+    msg = wait(nextIntervalMs, port)
+    ...
+    res = DoPollResult(sinceVersion)
+    sinceVersion = ProcessPollResult(res, sinceVersion)
+    nextIntervalMs = GetNextInterval(res, c.ADS_POLL_MS)
+end while
+```
+
+The default polling interval is `ADS_POLL_MS = 10000ms` (10 seconds). The server can return a `next_check_at` field (ISO 8601 timestamp or Unix timestamp) to override the next interval. The minimum enforced interval is 2,000 ms.
+
+### Poll parameters
+
+Each poll request includes:
+
+| Parameter | Source |
+|---|---|
+| `device_id` | `m.global.deviceId` or `roDeviceInfo.GetChannelClientId()` |
+| `stream_position` | Current channel number from `m.global.channelList` |
+| `stream_id` | `m.top.streamId` if set |
+| `since_version` | Version token from last successful response |
+
+The task builds up to two poll requests (one by `stream_position`, one by `stream_id`) and tries them in order, falling back if one returns HTTP 422 with a stream-related error.
+
+### Active ad endpoint
+
+```text
+GET https://ads.globaltv.lat/api/v1/app/ads/active?device_id=...&stream_position=...&since_version=...
+```
+
+### Version tracking
+
+The `since_version` token is updated from the `version` or `since_version` field in each successful response. This allows the server to send only changes since the last snapshot. If the server returns HTTP 422 with a `since_version` validation error, the token is reset to `""` to force a full snapshot on the next poll.
+
+## Snapshot processing
+
+`ProcessPollResult()` handles the response:
+
+| HTTP code | Behavior |
+|---|---|
+| `200` | Parse JSON, update `sinceVersion`, emit ad payload |
+| `204` | No changes — keep current ad state |
+| `422` | If `since_version` validation error: reset token. Otherwise: log warning |
+| `401` / `403` | Emit `sessionInvalid` event |
+| `470` / `471` | Emit `userInactive` event |
+| Other | Log warning, keep current ad state |
+
+When a valid ad payload is received:
+
+```brightscript
+snapshot = BuildAdsSnapshot(data, normalizedAds, sinceVersion, res.requestPosition, res.requestStreamId)
+m.top.adsSnapshot = snapshot
+
+adPayload = normalizedAds[0]
+m.top.adData = adPayload
+```
+
+When the server returns an empty `ads: []` array:
+
+```brightscript
+if GTV_DataHasExplicitNoAds(data)
+    GTV_Log("AdsPolling", "Snapshot without ads (ads=[]): clearing current ad")
+    EmitAdsCleared(res.requestPosition, res.requestStreamId)
+    return sinceVersion
+end if
+```
+
+## Impression reporting
+
+Impressions are reported in batch to:
+
+```text
+POST https://ads.globaltv.lat/api/v1/app/impressions/events/batch
+```
+
+Defined as `ADS_PATH_IMPRESSIONS = "/app/impressions/events/batch"` in `AppConstants.brs`.
+
+## Ad formats
+
+Three ad display formats are supported, each rendered by a dedicated SceneGraph component:
+
+<CardGroup cols={3}>
+  <Card title="Format A — Banner" icon="rectangle-wide">
+    A banner ad displayed at the bottom or top of the screen. Component: `AdFormatA`.
+  </Card>
+  <Card title="Format B — Overlay" icon="layer-group">
+    A semi-transparent overlay ad rendered on top of the video. Component: `AdFormatB`.
+  </Card>
+  <Card title="Format C — Viewport reduction" icon="compress">
+    The video viewport is shrunk and the ad fills the freed space. Component: `AdFormatC`.
+  </Card>
+</CardGroup>
+
+The format is specified by the `format.type` field in the ad payload (e.g., `"A"`, `"B"`, or `"C"`). The `AdManager` component reads this field and instantiates the correct renderer.
+
+## Channel change reset
+
+When the user switches channels, the polling task receives a `resetChannel = true` signal. This resets `sinceVersion` to `""` and immediately polls for ads relevant to the new channel:
+
+```brightscript
+if fieldName = "resetChannel" and m.top.resetChannel = true
+    m.top.resetChannel = false
+    sinceVersion = ""
+    nextIntervalMs = c.ADS_POLL_MS
+    GTV_Log("AdsPolling", "Channel changed - snapshot reset")
+    res = DoPollResult(sinceVersion)
+    ...
+end if
+```
+
+## Session and account errors
+
+The ads polling task emits signals on auth-related errors detected in poll responses:
+
+| Signal | Trigger |
+|---|---|
+| `sessionInvalid` | Password changed or invalid credentials detected in HTTP error or payload |
+| `userInactive` | Account inactive flag or inactive keyword found in payload |
+| `adsCleared` | Ads cleared after session/inactive error, or server returns empty ad list |
+
+<Warning>
+When `sessionInvalid` or `userInactive` is emitted by the ads task, the player stops, credentials may be cleared, and the app redirects to the login screen.
+</Warning>

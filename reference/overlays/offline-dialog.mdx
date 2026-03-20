@@ -1,0 +1,104 @@
+---
+title: OfflineDialog
+description: Full-screen modal shown when internet connectivity is lost, with a countdown timer and automatic retry logic.
+---
+
+`OfflineDialog` is a SceneGraph `Group` component that blocks the UI when the device loses its internet connection. It counts down 30 seconds, then automatically fires `retryRequested`. The viewer can also trigger a manual retry at any time by pressing **OK** or **Play**.
+
+## When it appears
+
+The parent screen makes `OfflineDialog` visible when a connectivity check fails (e.g. the health endpoint returns an error or a network request times out with HTTP code `-1`, classified as `AUTH_REASON_NETWORK_DOWN = 460` in `AppConstants`).
+
+## Interface fields
+
+<ParamField body="message" type="string" default="Sin conexión a internet">
+  Secondary body text shown below the title. Long strings are marquee-scrolled automatically when they exceed the label width.
+</ParamField>
+
+<ParamField body="context" type="string" default="">
+  Optional context string reserved for caller use. Not rendered directly by the component.
+</ParamField>
+
+<ParamField body="retryRequested" type="boolean" default="false">
+  Toggled `false → true` by the component on each auto-retry tick (every 30 seconds) and on manual retry (OK/Play key). The parent screen observes this field to re-check connectivity and attempt to resume playback.
+</ParamField>
+
+<ParamField body="retryVisualTick" type="integer" default="0">
+  Written by the parent to trigger the retry visual animation (`PlayRetryVisual`). Increment this field each time a retry attempt begins to flash the card and button.
+</ParamField>
+
+## Automatic retry behaviour
+
+When `OfflineDialog` becomes visible:
+
+1. The 30-second `retryTimer` starts.
+2. A 1-second `tickTimer` decrements the countdown label each second.
+3. When `retryTimer` fires, `retryRequested` is toggled `false → true`.
+4. The countdown resets to 30 and the cycle repeats.
+
+All timers stop immediately when the dialog is hidden (`visible = false`).
+
+```brightscript
+' retryTimer fires every 30 seconds
+sub OnAutoRetry()
+    m.countdown = 30
+    m.top.retryRequested = false
+    m.top.retryRequested = true
+end sub
+```
+
+## How the app recovers when connectivity is restored
+
+<Steps>
+  <Step title="retryRequested fires">
+    The parent screen receives the `retryRequested = true` event (from auto-retry or a manual keypress).
+  </Step>
+  <Step title="Connectivity check">
+    The parent pings the health endpoint (`PATH_HEALTH = "/health"`). If it succeeds, connectivity is confirmed.
+  </Step>
+  <Step title="retryVisualTick incremented">
+    The parent sets `offlineDialog.retryVisualTick = offlineDialog.retryVisualTick + 1` to trigger `PlayRetryVisual`, which briefly brightens the card and button to indicate the attempt.
+  </Step>
+  <Step title="Dialog dismissed">
+    On a successful health check, the parent sets `offlineDialog.visible = false`. All timers stop and the viewer returns to normal playback.
+  </Step>
+  <Step title="Playback resumed">
+    The parent re-initiates the channel stream from the last known channel index (`REG_KEY_CHANNEL`).
+  </Step>
+</Steps>
+
+## Marquee scrolling
+
+When `message` is too long to fit in the `lblMessage` label, `OfflineDialog` automatically enables a character-by-character marquee scroll driven by a 180 ms repeating `marqueeTimer`. The scroll pauses for 6 ticks at the beginning of each loop before restarting.
+
+## XML component definition
+
+```xml
+<component name="OfflineDialog" extends="Group">
+    <interface>
+        <field id="message"         type="string"  value="Sin conexión a internet" />
+        <field id="context"         type="string"  value="" />
+        <field id="retryRequested"  type="boolean" value="false" />
+        <field id="retryVisualTick" type="integer" value="0" />
+    </interface>
+    ...
+    <children>
+        <Rectangle id="dimBg"         color="0x000000BB" />
+        <Rectangle id="card"          color="0x002CF27A" />
+        <Poster    id="errorIcon"      uri="pkg:/images/error-icon.png" />
+        <Label     id="lblTitle"       text="Sin conexión" />
+        <Label     id="lblMessage"     />
+        <Label     id="lblCountdown"   text="Reintentando en 30s" />
+        <Rectangle id="btnRetryFocus" />
+        <Rectangle id="btnRetryBg"    color="0x002CF2FF" />
+        <Label     id="btnRetryLabel" text="Reintentar" />
+        <Timer id="retryTimer"   duration="30"   repeat="true" />
+        <Timer id="tickTimer"    duration="1"    repeat="true" />
+        <Timer id="marqueeTimer" duration="0.18" repeat="true" />
+    </children>
+</component>
+```
+
+<Note>
+The `retryRequested` field is toggled `false → true` rather than simply set to `true`. This ensures observers always receive a value-change event even if the field was already `true` from a previous attempt. Always observe the field rather than polling it.
+</Note>

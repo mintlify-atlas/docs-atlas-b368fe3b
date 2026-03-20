@@ -1,0 +1,137 @@
+---
+title: "HandshakeTask"
+description: "Background task that establishes a device session with the backend, discovers the active server, and populates device identity fields in m.global."
+---
+
+`HandshakeTask` runs `RunHandshake` on a worker thread. It finds a reachable server, POSTs device identity information to `PATH_HANDSHAKE`, and stores the result in global state. The handshake runs once at startup before authentication.
+
+## XML component definition
+
+```xml HandshakeTask.xml
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="HandshakeTask" extends="Task">
+  <interface>
+    <!-- inputs -->
+    <field id="forcedServerUrl" type="string"     value="" />
+    <!-- outputs -->
+    <field id="result"          type="assocarray" />
+    <field id="done"            type="boolean"    value="false" />
+  </interface>
+  <task functionName="RunHandshake" />
+</component>
+```
+
+## Input fields
+
+<ParamField path="forcedServerUrl" type="String">
+  Optional. When non-empty, bypasses the automatic server discovery and uses this URL as the only candidate. Useful for manual server configuration in the settings screen. The value is normalised by `GTV_ServerNormalizeBaseUrl()` before use.
+</ParamField>
+
+## Output fields
+
+<ParamField path="result" type="AssocArray">
+  Populated when `done` becomes `true`. Contains the fields listed in the [Result object](#result-object) section.
+</ParamField>
+
+<ParamField path="done" type="Boolean">
+  Set to `true` when the task finishes, whether successful or not.
+</ParamField>
+
+## Result object
+
+| Key | Type | Description |
+|---|---|---|
+| `success` | Boolean | `true` when the server accepted the handshake |
+| `server` | String | Base URL of the server that responded |
+| `realtimeMode` | String | Delivery mode returned by the server; defaults to `"polling"` |
+| `errorCode` | Integer | HTTP code of the last failed attempt, or `-1` for a network error |
+| `errorMsg` | String | Localised error string on failure |
+
+## Global state written
+
+On success, the task writes the following `m.global` fields:
+
+| Field | Source |
+|---|---|
+| `m.global.deviceId` | `roDeviceInfo.GetChannelClientId()` |
+| `m.global.deviceModel` | `roDeviceInfo.GetModelDisplayName()` |
+| `m.global.osVersion` | `GTV_NormalizeOsVersion(di)` — handles string, array, and assoc-array formats |
+| `m.global.activeServer` | The resolved server URL |
+| `m.global.rida` | `roDeviceInfo.GetRIDA()` |
+| `m.global.lat` | `roDeviceInfo.IsRIDADisabled()` |
+| `m.global.deviceTimezone` | `roDateTime.GetTimeZoneOffset()` |
+| `m.global.deviceIp` | `deviceIp` field from the server response (if present) |
+| `m.global.realtimeMode` | `realtimeMode` field from the server response |
+
+## Function flow
+
+<Steps>
+  <Step title="Resolve server">
+    Calls `GTV_FindActiveServer(forcedServer)`. If `forcedServerUrl` is set, only that URL is tried. Otherwise, the full server probe list is used. A failure here ends the task immediately.
+  </Step>
+  <Step title="Collect device info">
+    Reads `GetChannelClientId()`, `GetModelDisplayName()`, `GTV_NormalizeOsVersion()`, and `GTV_GetAppVersion()`. Also reads `GetRIDA()` and `IsRIDADisabled()` for ad-targeting context.
+  </Step>
+  <Step title="POST handshake">
+    Builds a JSON payload with `platform`, `device_id`, `device_model`, `os_version`, and `app_version`, then calls `GTV_HttpPost(url, jsonStr, TIMEOUT_HTTP)`. The URL is `server + PATH_HANDSHAKE`.
+  </Step>
+  <Step title="Retry with failover">
+    Retries up to `RETRY_MAX` (3) times. On network error, advances to the next server in `GTV_ServerBuildRequestSequence()`. Stops immediately on HTTP 401 or 403 (auth required).
+  </Step>
+  <Step title="Parse response">
+    Cleans and parses the JSON body with `GTV_CleanJson()` and `ParseJson()`. Reads `realtimeMode` and `deviceIp` from the response.
+  </Step>
+  <Step title="Write global state and signal completion">
+    Writes device identity and server info to `m.global`, then sets `m.top.result` and `m.top.done = true`.
+  </Step>
+</Steps>
+
+## AppConstants values used
+
+| Constant | Value | Used for |
+|---|---|---|
+| `TIMEOUT_HTTP` | `12000` ms | HTTP timeout for the handshake POST |
+| `RETRY_MAX` | `3` | Maximum handshake attempts across servers |
+| `PATH_HANDSHAKE` | `"/api/v1/app/devices/handshake"` | Endpoint path for the handshake POST |
+| `PLATFORM` | `"roku"` | Value sent in the `platform` field of the payload |
+
+## Handshake request payload
+
+```brightscript
+payload = {
+    platform     : c.PLATFORM,       ' "roku"
+    device_id    : deviceId,          ' roDeviceInfo.GetChannelClientId()
+    device_model : GTV_GetBrandedDeviceModel(di),
+    os_version   : osVersion,         ' normalised OS version string
+    app_version  : appVersion         ' from manifest
+}
+```
+
+## Usage example
+
+```brightscript
+' Run at channel startup before showing the login screen
+m.handshakeTask = CreateObject("roSGNode", "HandshakeTask")
+m.handshakeTask.observeFieldScoped("done", "OnHandshakeDone")
+m.handshakeTask.control = "RUN"
+
+sub OnHandshakeDone()
+    r = m.handshakeTask.result
+    if r.success
+        ' proceed to auth check
+        CheckSavedCredentials()
+    else
+        ShowError(r.errorMsg)
+    end if
+end sub
+
+' Force a specific server (e.g. from settings screen)
+m.handshakeTask = CreateObject("roSGNode", "HandshakeTask")
+m.handshakeTask.forcedServerUrl = "http://192.168.1.50:3333"
+m.handshakeTask.observeFieldScoped("done", "OnHandshakeDone")
+m.handshakeTask.control = "RUN"
+```
+
+<Warning>
+HTTP 401 and 403 responses terminate the retry loop immediately and are recorded in `result.errorCode`. If you see these codes, the backend requires authentication for the handshake endpoint — which is non-standard; verify your server configuration.
+</Warning>

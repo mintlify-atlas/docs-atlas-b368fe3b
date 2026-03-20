@@ -1,0 +1,145 @@
+---
+title: "MetricsTask"
+description: "Long-running background task that receives ad telemetry events and POSTs them to the metrics and impressions endpoints."
+---
+
+`MetricsTask` runs `RunMetrics` as a persistent worker thread. It waits for objects written to the `trackEvent` input field, then dispatches each event to the appropriate endpoint. Regular events go to `PATH_METRICS`; `ad_impression_closed` events are batched and sent to the impressions endpoint.
+
+<Note>
+If the server returns HTTP 401 or 403, the task silently disables further metric posts for the rest of the session to avoid repeated failures. This is logged as a warning.
+</Note>
+
+## XML component definition
+
+```xml MetricsTask.xml
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="MetricsTask" extends="Task">
+  <interface>
+    <!-- input -->
+    <field id="trackEvent" type="assocarray" />
+    <!-- output -->
+    <field id="lastResult" type="assocarray" />
+  </interface>
+  <task functionName="RunMetrics" />
+</component>
+```
+
+## Input fields
+
+<ParamField path="trackEvent" type="AssocArray">
+  Write an event object to this field to queue it for posting. The task observes this field and processes each value change. See [Event object shape](#event-object-shape) for the expected keys.
+</ParamField>
+
+## Output fields
+
+<ParamField path="lastResult" type="AssocArray">
+  Updated after every post attempt. Contains `ok` (Boolean), `code` (Integer HTTP status), and `server` (String base URL of the server that was tried).
+</ParamField>
+
+## Event object shape
+
+The `trackEvent` assoc-array is flexible — the task reads fields in priority order:
+
+| Key (camelCase) | Key (snake_case) | Description |
+|---|---|---|
+| `eventType` | `event_type` or `event` | **Required.** Event name (e.g. `"ad_shown"`, `"ad_impression_closed"`) |
+| `adId` | `ad_id` | ID of the ad being tracked |
+| `adFormat` | `ad_format` | Format identifier of the ad |
+| `extraData` | `extra_data` | Optional assoc-array of additional key-value pairs merged into the payload |
+| `visible_ms` / `visibleMs` | — | Milliseconds the ad was visible; required for `ad_impression_closed` |
+| `event_uuid` / `eventUuid` | — | Unique event identifier for deduplication; auto-generated if absent |
+| `stream_id` / `streamId` / `channel_id` / `channelId` | — | Stream or channel identifier for impression batches |
+
+## Function flow
+
+<Steps>
+  <Step title="Wait for events">
+    The task waits indefinitely (`wait(0, port)`) on a message port that observes `trackEvent` and `control`.
+  </Step>
+  <Step title="Dispatch event">
+    On each `trackEvent` change, reads the event name via `GTV_ReadMetricEventName()`. If the name is empty, the event is skipped with a warning.
+  </Step>
+  <Step title="Impression batch path">
+    Events named `ad_impression_closed` are routed to `PostImpressionBatchEvent()`, which requires `visible_ms >= 1000` ms. Shorter impressions are silently dropped. The batch is POSTed to `ADS_PATH_IMPRESSIONS` (with fallback to `ADS_PATH_IMPRESSIONS_FALLBACK` on 404).
+  </Step>
+  <Step title="Standard event path">
+    All other events go through `PostEvent()`, which builds a context object (platform, device ID, model, OS version, user ID, channel ID, IP, timezone, RIDA, LAT) and assembles a payload with both camelCase and snake_case keys for compatibility.
+  </Step>
+  <Step title="Post with fallback">
+    `PostMetricWithFallback()` tries `m.global.activeServer + PATH_METRICS`. Uses the first server from `SERVER_LIST` if `activeServer` is empty.
+  </Step>
+  <Step title="Auth failure guard">
+    HTTP 401 or 403 sets an internal `m.metricsDisabled` flag (or `m.impressionAuthWarned` for impression batches) to prevent repeated failures. Subsequent events are dropped silently.
+  </Step>
+</Steps>
+
+## AppConstants values used
+
+| Constant | Value | Used for |
+|---|---|---|
+| `TIMEOUT_HTTP` | `12000` ms | HTTP timeout for each POST |
+| `PATH_METRICS` | `"/api/v1/app/metrics/track"` | Endpoint for standard telemetry events |
+| `ADS_USE_DEDICATED` | `true` | Routes impression batches to `ADS_API_BASE_URL` first |
+| `ADS_API_BASE_URL` | `"https://ads.globaltv.lat/api/v1"` | Base URL for the dedicated ads server |
+| `ADS_PATH_IMPRESSIONS` | `"/app/impressions/events/batch"` | Primary impressions batch endpoint |
+| `ADS_PATH_IMPRESSIONS_FALLBACK` | `""` | Fallback impressions path tried on 404 |
+| `PLATFORM` | `"roku"` | Value included in the event `context` object |
+
+## Usage example
+
+```brightscript
+' Start the task when the player screen opens
+m.metricsTask = CreateObject("roSGNode", "MetricsTask")
+m.metricsTask.control = "RUN"
+
+' Track when an ad is displayed
+m.metricsTask.trackEvent = {
+    eventType : "ad_shown",
+    adId      : m.currentAd.ad_id,
+    adFormat  : m.currentAd.format.type
+}
+
+' Track a completed impression
+m.metricsTask.trackEvent = {
+    eventType  : "ad_impression_closed",
+    adId       : m.currentAd.ad_id,
+    visible_ms : m.adVisibleMs,
+    stream_id  : m.currentChannel.id,
+    event_uuid : m.currentAdEventUuid
+}
+
+' Stop when the player screen closes
+m.metricsTask.control = "stop"
+```
+
+<Warning>
+Assigning the same assoc-array object reference twice to `trackEvent` may not trigger the observer. Always assign a new object or modify the reference each time you want to fire an event.
+</Warning>
+
+## Standard event payload
+
+The following payload is sent for non-impression events:
+
+```brightscript
+payload = {
+    event_type : eventName,
+    eventType  : eventName,
+    ad_id      : adId,
+    adId       : adId,
+    ad_format  : adFormat,
+    adFormat   : adFormat,
+    timestamp  : dt.AsSeconds(),
+    context    : {
+        platform    : c.PLATFORM,
+        deviceId    : m.global.deviceId,
+        deviceModel : m.global.deviceModel,
+        osVersion   : m.global.osVersion,
+        userId      : m.global.userId,
+        channelId   : m.global.currentChannelId,
+        ip          : m.global.deviceIp,
+        timezone    : m.global.deviceTimezone,
+        rida        : m.global.rida,
+        lat         : m.global.lat
+    }
+}
+```

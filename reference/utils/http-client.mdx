@@ -1,0 +1,203 @@
+---
+title: HTTP client
+description: Async HTTP GET and POST helpers used throughout GlobalTV Roku for API calls, playlist fetching, and health checks.
+---
+
+The HTTP client module wraps `roUrlTransfer` with consistent headers, certificate handling, and timeout enforcement. All network calls in the app go through these helpers.
+
+## Constants (from AppConstants)
+
+| Constant         | Value                          | Description                              |
+|------------------|--------------------------------|------------------------------------------|
+| `TIMEOUT_HTTP`   | `12000` ms                     | Default timeout for general HTTP calls   |
+| `TIMEOUT_AUTH`   | `15000` ms                     | Default timeout for auth requests        |
+| `TIMEOUT_HEALTH` | `2500` ms                      | Timeout used by health-check pings       |
+| `RETRY_MAX`      | `3`                            | Maximum retry attempts                   |
+| `CERTS`          | `common:/certs/ca-bundle.crt`  | Certificate bundle path for HTTPS        |
+| `PLATFORM`       | `roku`                         | Value sent in the `X-Platform` header    |
+
+---
+
+## Functions
+
+### GTV_HttpGet
+
+```brightscript
+function GTV_HttpGet(url as String, timeoutMs = 15000 as Integer) as Object
+```
+
+Performs an async HTTP GET request. Blocks the calling task until a response arrives or the timeout elapses.
+
+<ParamField path="url" type="String" required>
+  The full URL to request.
+</ParamField>
+
+<ParamField path="timeoutMs" type="Integer">
+  Timeout in milliseconds. Defaults to `15000`. The request is cancelled and an error result is returned if no response arrives within this window.
+</ParamField>
+
+**Return value**
+
+Returns an `roAssociativeArray` with the following fields:
+
+| Field  | Type    | Description                                         |
+|--------|---------|-----------------------------------------------------|
+| `code` | Integer | HTTP status code, or `-1` on timeout / launch error |
+| `body` | String  | Response body text                                  |
+| `ok`   | Boolean | `true` when `code` is in the 200–299 range          |
+
+**Example**
+
+```brightscript
+result = GTV_HttpGet("https://admin.globaltv.lat/health")
+if result.ok
+    GTV_Log("MyTask", "Server responded: " + result.body)
+else
+    GTV_Error("MyTask", "Health check failed, code=" + result.code.ToStr())
+end if
+```
+
+---
+
+### GTV_HttpPost
+
+```brightscript
+function GTV_HttpPost(url as String, jsonBody as String, timeoutMs = 15000 as Integer) as Object
+```
+
+Performs an async HTTP POST request with a JSON body. Blocks until a response arrives or the timeout elapses.
+
+<ParamField path="url" type="String" required>
+  The full URL to post to.
+</ParamField>
+
+<ParamField path="jsonBody" type="String" required>
+  A JSON-encoded string to send as the request body. The `Content-Type: application/json` header is set automatically.
+</ParamField>
+
+<ParamField path="timeoutMs" type="Integer">
+  Timeout in milliseconds. Defaults to `15000`.
+</ParamField>
+
+**Return value**
+
+Same `{code, body, ok}` object as `GTV_HttpGet`.
+
+**Example**
+
+```brightscript
+payload = FormatJson({event: "play", channelId: "42"})
+result = GTV_HttpPost("https://admin.globaltv.lat/api/v1/app/metrics/track", payload)
+if not result.ok
+    GTV_Warn("Metrics", "Track failed code=" + result.code.ToStr())
+end if
+```
+
+---
+
+### GTV_BuildQuery
+
+```brightscript
+function GTV_BuildQuery(params as Object) as String
+```
+
+Builds a URL-encoded query string from an associative array. Values are escaped with `GTV_UrlEncode`.
+
+<ParamField path="params" type="Object" required>
+  An `roAssociativeArray` of key/value pairs. Values are coerced to strings via `.ToStr()` before encoding.
+</ParamField>
+
+**Return value** — A `String` query string without a leading `?`, e.g. `key1=val1&key2=val2`.
+
+**Example**
+
+```brightscript
+qs = GTV_BuildQuery({user: "demo", pass: "secret"})
+url = "https://admin.globaltv.lat/auth?" + qs
+```
+
+---
+
+### GTV_UrlEncode
+
+```brightscript
+function GTV_UrlEncode(s as String) as String
+```
+
+Percent-encodes a single string using `roUrlTransfer.Escape`.
+
+**Example**
+
+```brightscript
+encoded = GTV_UrlEncode("hello world") ' returns "hello%20world"
+```
+
+---
+
+### GTV_BuildUserAgent
+
+```brightscript
+function GTV_BuildUserAgent(di = invalid as Dynamic) as String
+```
+
+Builds the `User-Agent` header string that is attached to every request made by `GTV_HttpGet` and `GTV_HttpPost`.
+
+<ParamField path="di" type="Dynamic">
+  Optional `roDeviceInfo` object. A new instance is created internally when `invalid` is passed.
+</ParamField>
+
+**Format**
+
+```
+GlobalTV_Roku/<version> (roku; <ModelDisplayName>; <osVersion>)
+```
+
+**Example output**
+
+```
+GlobalTV_Roku/1.0.6 (roku; Roku Express; 12.0.0)
+```
+
+---
+
+### GTV_GetAppVersion
+
+```brightscript
+function GTV_GetAppVersion() as String
+```
+
+Returns the app version string from `AppConstants().APP_VERSION`. Falls back to `"1.0.1"` if the constant is missing or empty.
+
+---
+
+### GTV_GetAppIdentity
+
+```brightscript
+function GTV_GetAppIdentity() as String
+```
+
+Returns the app identity string from `AppConstants().APP_IDENTITY`. Falls back to `"GLOBALTV_ROKU"`.
+
+---
+
+## Default headers
+
+Every request created by `GTV_HttpGet` or `GTV_HttpPost` includes these headers:
+
+```
+Content-Type: application/json
+X-Platform: roku
+User-Agent: GlobalTV_Roku/<version> (roku; <model>; <os>)
+```
+
+## Timeout and cancellation
+
+Both `GTV_HttpGet` and `GTV_HttpPost` use `roMessagePort` with `wait(timeoutMs, port)`. If the wait returns `invalid` (timeout), the transfer is cancelled with `AsyncCancel()` and the function returns `{code: -1, body: "", ok: false}`.
+
+<Warning>
+These functions block the calling task thread. Do not call them from a SceneGraph UI thread — only call them from within a `Task` node.
+</Warning>
+
+## Certificate handling
+
+HTTPS requests use the Roku system certificate bundle at `common:/certs/ca-bundle.crt`. This path is defined in `AppConstants().CERTS` and applied via `SetCertificatesFile`. The health-check helper (`GTV_PingServer`) only sets the certificate file when the URL starts with `https`.

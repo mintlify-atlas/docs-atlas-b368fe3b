@@ -1,0 +1,123 @@
+---
+title: Logging
+description: How GlobalTV Roku logs debug, warning, and error messages using three severity-gated functions.
+---
+
+All logging in GlobalTV Roku goes through three functions defined in `source/utils/Logger.brs`. Each function uses a `[tag]` prefix to identify the calling component.
+
+## Log functions
+
+### GTV_Log — debug (dev builds only)
+
+```brightscript
+sub GTV_Log(tag as String, msg as String)
+    if tag = invalid or msg = invalid
+        return
+    end if
+    #if IS_DEV_BUILD
+        print "[GTV][" + tag + "] " + msg
+    #end if
+end sub
+```
+
+`GTV_Log()` is compiled out in production builds. The `#if IS_DEV_BUILD` conditional means the `print` statement only exists in the binary when `IS_DEV_BUILD=true` is set in the manifest's `bs_const` field.
+
+**Example output:**
+
+```text
+[GTV][AuthTask] event=auth_request server=https://admin.globaltv.lat
+[GTV][PlaylistTask] Parsed 120 channels, 8 categories
+[GTV][MainScene] Auth success. userId=12345
+```
+
+### GTV_Warn — warnings (always printed)
+
+```brightscript
+sub GTV_Warn(tag as String, msg as String)
+    print "[GTV][WARN][" + tag + "] " + msg
+end sub
+```
+
+`GTV_Warn()` always emits output regardless of build type. Use it for non-fatal issues that an operator should know about, such as auth failures, dropped channels, or connectivity problems.
+
+**Example output:**
+
+```text
+[GTV][WARN][AuthTask] Auth failed reasonCode=401 httpCode=401
+[GTV][WARN][PlaylistTask] event=parser_drop reason=missing_channel_number count=3
+[GTV][WARN][ConnectivityTask] No internet reachability
+```
+
+### GTV_Error — errors (always printed)
+
+```brightscript
+sub GTV_Error(tag as String, msg as String)
+    print "[GTV][ERROR][" + tag + "] " + msg
+end sub
+```
+
+`GTV_Error()` always emits output. Use it for failures that prevent normal operation, such as a failed handshake or a playlist load error.
+
+**Example output:**
+
+```text
+[GTV][ERROR][MainScene] Handshake failed: Sin conexión al servidor. Verifica tu red.
+[GTV][ERROR][MainScene] Playlist failed: No se pudo cargar la lista de canales reasonCode=460
+```
+
+## Output format
+
+| Function | Format | Always printed |
+|---|---|---|
+| `GTV_Log` | `[GTV][<tag>] <msg>` | No — dev builds only |
+| `GTV_Warn` | `[GTV][WARN][<tag>] <msg>` | Yes |
+| `GTV_Error` | `[GTV][ERROR][<tag>] <msg>` | Yes |
+
+## Enabling dev build mode
+
+Dev logging is controlled by the `IS_DEV_BUILD` BrightScript constant, declared in the `manifest` file using `bs_const`:
+
+```text
+bs_const=IS_DEV_BUILD=true
+```
+
+To disable dev logging for a production build, set:
+
+```text
+bs_const=IS_DEV_BUILD=false
+```
+
+<Warning>
+Leave `IS_DEV_BUILD=false` in production builds. `GTV_Log()` calls can be verbose — they log every HTTP request, response code, channel parse sample, and session state change.
+</Warning>
+
+<Tip>
+You can view log output from a sideloaded channel in real time using the Roku debug console over telnet:
+
+```bash
+telnet <roku-ip> 8085
+```
+</Tip>
+
+## Tags used in the codebase
+
+| Tag | Component |
+|---|---|
+| `AuthTask` | `components/tasks/AuthTask.brs` |
+| `PlaylistTask` | `components/tasks/PlaylistTask.brs` |
+| `AdsPolling` | `components/tasks/AdsPollingTask.brs` |
+| `ConnectivityTask` | `components/tasks/ConnectivityTask.brs` |
+| `MainScene` | `components/MainScene.brs` |
+| `LayoutDiag` | Layout diagnostic prints via `GTV_LayoutPrint()` |
+
+## Diagnostic flags
+
+Additional verbose diagnostic output is gated behind flags in `AppConstants.brs`:
+
+```brightscript
+LAYOUT_DIAG          : false
+MAINSCREEN_GRID_DIAG : false
+ADS_FLOW_DIAG        : false
+```
+
+When `ADS_FLOW_DIAG = true`, `AdsPollingTask` emits detailed `FLOW` prefixed warn-level messages for every poll cycle, ad emission, and clear event. These use `GTV_Warn()` and are therefore visible in both dev and production builds.

@@ -1,0 +1,177 @@
+---
+title: "Requirements"
+description: "System, device, backend, and network requirements for building and running GlobalTV Roku."
+---
+
+## System requirements
+
+The Makefile build and deploy targets require the following tools on your development machine:
+
+| Tool   | Minimum | Purpose                                                        |
+| ------ | ------- | -------------------------------------------------------------- |
+| `make` | Any     | Runs `zip`, `install`, `pkg`, `check`, and `clean` targets     |
+| `zip`  | Any     | Creates `out/GlobalTV.zip` from project sources                |
+| `curl` | Any     | Uploads the ZIP to the Roku device via HTTP multipart POST     |
+| `rm`   | Any     | Used by `make clean` to remove the `out/` directory           |
+| `grep` | Any     | Used by `make check` and `make install` to parse responses     |
+| `sed`  | Any     | Used by `make install` to display error output on failure      |
+
+<Tabs>
+  <Tab title="macOS / Linux">
+    `make`, `zip`, `curl`, `rm`, `grep`, and `sed` are available by default on most macOS and Linux systems. No additional setup is needed.
+
+    ```bash
+    make --version
+    zip --version
+    curl --version
+    ```
+  </Tab>
+  <Tab title="Windows">
+    The Makefile assumes Unix-style commands. On Windows, use one of:
+
+    **Option 1 — Git Bash** (recommended): Git for Windows ships with `make`, `zip`, `curl`, `rm`, `grep`, and `sed` pre-installed. Run all Makefile commands from the Git Bash terminal.
+
+    **Option 2 — Chocolatey**:
+
+    ```bash
+    choco install make zip curl
+    ```
+
+    <Warning>
+      Running `make` targets from PowerShell or Command Prompt is not supported. The Makefile uses Unix shell syntax. Always use Git Bash or WSL on Windows.
+    </Warning>
+  </Tab>
+</Tabs>
+
+## Roku device requirements
+
+### Developer mode
+
+Sideloading requires your Roku device to be in developer mode. Activate it with this remote sequence:
+
+**Home × 3 → Up × 2 → Right → Left → Right → Left → Right**
+
+This opens the **Developer Settings** screen where you enable the installer and set a password. That password is the `ROKU_PASS` value you pass to `make install`.
+
+<Note>
+  Developer mode persists across reboots but is cleared if you factory-reset the device or perform certain firmware updates. Re-enable it using the same key sequence if it stops working.
+</Note>
+
+### Firmware and resolution
+
+| Requirement          | Value                                                      |
+| -------------------- | ---------------------------------------------------------- |
+| SceneGraph version   | `rsg_version=1.3` (declared in `manifest`)                |
+| Supported resolutions | FHD (1920×1080) and HD (1280×720) — `ui_resolutions=fhd,hd` |
+| `supports_input_launch` | `1` — required for deep link support                  |
+
+The app targets FHD as the primary design resolution and scales down to HD automatically at runtime using `roDeviceInfo.GetDisplayMode()`.
+
+## Backend requirements
+
+GlobalTV Roku communicates with a configurable backend server. The server list in `AppConstants.brs` defines the endpoints the app will try:
+
+```text
+http://172.17.11.2:3333       ← LAN / development server
+https://admin.globaltv.lat    ← Production server
+```
+
+The app probes each server in order and uses the first one that responds to the health check. You can configure the server list in `source/AppConstants.brs`.
+
+### Required endpoints
+
+All paths below are relative to the selected backend base URL.
+
+<AccordionGroup>
+  <Accordion title="GET /health">
+    **Purpose:** Server reachability probe. The app sends this request before every major operation to confirm the backend is up.
+
+    **Timeout:** 2500 ms (`TIMEOUT_HEALTH`)
+
+    **Expected response:** Any HTTP 2xx response is treated as healthy.
+  </Accordion>
+
+  <Accordion title="POST /api/v1/app/devices/handshake">
+    **Purpose:** Device registration handshake. Called at startup to register the Roku device with the backend and retrieve device-specific configuration.
+
+    **Timeout:** 12000 ms (`TIMEOUT_HTTP`)
+  </Accordion>
+
+  <Accordion title="GET /auth/{user}/{pass}">
+    **Purpose:** User authentication. The app substitutes the actual username and password into the path template.
+
+    **Path template:** `/auth/{user}/{pass}`
+
+    **Timeout:** 15000 ms (`TIMEOUT_AUTH`)
+
+    **Auth failure codes handled:**
+
+    | Code | Meaning                  |
+    | ---- | ------------------------ |
+    | 401  | Invalid credentials      |
+    | 403  | Access forbidden         |
+    | 404  | User not found           |
+    | 460  | Network down             |
+    | 470  | Account inactive         |
+    | 471  | Password changed         |
+  </Accordion>
+
+  <Accordion title="GET /auth/{user}/{pass}/playlist/m3u8/hls">
+    **Purpose:** Fetches the authenticated M3U8/HLS playlist for the logged-in user. The app parses this playlist to build the channel list and category grid.
+
+    **Path template:** `/auth/{user}/{pass}/playlist/m3u8/hls`
+
+    **Timeout:** 12000 ms (`TIMEOUT_HTTP`)
+  </Accordion>
+
+  <Accordion title="GET /api/v1/app/ads/active">
+    **Purpose:** Returns the currently active ad snapshot. Polled every 10 seconds (`ADS_POLL_MS=10000`) while the app is running.
+
+    **Timeout:** 12000 ms (`TIMEOUT_HTTP`)
+  </Accordion>
+
+  <Accordion title="POST /api/v1/app/metrics/track">
+    **Purpose:** Metrics and usage event tracking.
+
+    **Timeout:** 12000 ms (`TIMEOUT_HTTP`)
+  </Accordion>
+</AccordionGroup>
+
+### Ads backend
+
+The app uses a dedicated ads service separate from the main backend. The base URL is configured in `AppConstants.brs`:
+
+```text
+https://ads.globaltv.lat/api/v1
+```
+
+| Path                             | Purpose                                  |
+| -------------------------------- | ---------------------------------------- |
+| `/app/devices/handshake`         | Ads service device registration          |
+| `/app/ads/active`                | Active ad snapshot poll                  |
+| `/app/impressions/events/batch`  | Batch impression event reporting         |
+
+<Note>
+  The ads backend can be toggled via `ADS_USE_DEDICATED=true` and `ADS_HANDSHAKE_ENABLED=true` in `AppConstants.brs`. When disabled, the app falls back to the main backend for ad data.
+</Note>
+
+### Retry behavior
+
+| Constant                    | Value  | Description                                      |
+| --------------------------- | ------ | ------------------------------------------------ |
+| `RETRY_MAX`                 | `3`    | Maximum HTTP retry attempts per request          |
+| `SERVER_LAN_FORCE_RETRIES`  | `3`    | Extra retries forced for the LAN server          |
+| `NET_RETRY_MS`              | `30000`| Wait time before retrying after a network failure |
+
+## Network requirements
+
+| Requirement       | Details                                                                         |
+| ----------------- | ------------------------------------------------------------------------------- |
+| LAN connectivity  | The Roku device and your development machine must be on the same local network for sideloading via `make install` |
+| Internet access   | Required to reach `https://admin.globaltv.lat` and `https://ads.globaltv.lat` in production |
+| Port 80 (HTTP)    | Used by the Roku Developer Application Installer at `http://<ROKU_IP>/plugin_install` |
+| Port 8080         | Used by the Roku `telnet` interface for `genkey` when generating signing keys for `make pkg` |
+
+<Warning>
+  Firewalls or network isolation (e.g., guest Wi-Fi networks that block device-to-device traffic) will prevent sideloading. Make sure your machine and Roku are on the same unrestricted LAN segment.
+</Warning>

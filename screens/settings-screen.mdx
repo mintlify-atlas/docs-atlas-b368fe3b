@@ -1,0 +1,163 @@
+---
+title: Settings Screen
+description: Settings panel with safe area adjustment, channel refresh, logout, and a hidden server management panel accessible after five taps on About.
+---
+
+The `SettingsScreen` is a modal panel that overlays the player. It is opened by pressing OK twice while watching a channel. It provides account and display settings, and a hidden server management section for technical administration.
+
+## How to access settings
+
+<Steps>
+  <Step title="Press OK once while watching a channel">
+    The player banner shows "En vivo" and a hint label appears: "Presiona OK otra vez para abrir configuracion". A 1.2-second timer arms the shortcut.
+  </Step>
+  <Step title="Press OK a second time before the timer expires">
+    `PlayerScreen` sets `m.top.openSettings = true`. `MainScene` observes this and shows `SettingsScreen`.
+  </Step>
+  <Step title="Press Back or select Close to return">
+    `SettingsScreen` sets `closeSettings = true`. `MainScene` hides the panel and returns focus to the player.
+  </Step>
+</Steps>
+
+<Note>
+If OK is not pressed a second time within 1.2 seconds, the shortcut resets and the hint disappears.
+</Note>
+
+## Main menu items
+
+The screen starts in `MODE_MAIN` with these items:
+
+```brightscript
+' components/SettingsScreen/SettingsScreen.brs
+if m.mode = m.MODE_MAIN
+    items.Push({ kind: "safeArea",       label: "Área segura: " + m.safeMarginPct.ToStr() + "%" })
+    items.Push({ kind: "refreshChannels", label: "Actualizar canales" })
+    items.Push({ kind: "logout",          label: "Cerrar sesión" })
+    items.Push({ kind: "about",           label: "Acerca de GlobalTV" })
+    if m.serverAdminUnlocked = true
+        items.Push({ kind: "viewServers", label: "Ver servidores" })
+    end if
+    items.Push({ kind: "close",           label: "Cerrar" })
+end if
+```
+
+## Safe area margin
+
+The safe area margin compensates for TV overscan. It is adjustable from **0% to 10%** using Left/Right keys when the "Área segura" item is focused:
+
+```brightscript
+sub AdjustSafeArea(delta as Integer)
+    c = AppConstants()
+    nextPct = m.safeMarginPct + delta
+    if nextPct < c.UI_SAFE_MARGIN_MIN_PCT then nextPct = c.UI_SAFE_MARGIN_MAX_PCT
+    if nextPct > c.UI_SAFE_MARGIN_MAX_PCT then nextPct = c.UI_SAFE_MARGIN_MIN_PCT
+
+    m.safeMarginPct = nextPct
+    GTV_RegSaveSafeMarginPct(nextPct)
+    m.top.safeAreaChanged = m.top.safeAreaChanged + 1
+    RebuildMenu()
+end sub
+```
+
+The value wraps around: pressing Left at 0% jumps to 10%, pressing Right at 10% returns to 0%. Changes are persisted to the Roku registry under the key `REG_KEY_SAFE_MARGIN = "uiSafeMarginPct"`. `MainScene` observes the `safeAreaChanged` counter and reapplies the layout to all visible screens.
+
+<Note>
+Default value at first launch is 0% (`UI_SAFE_MARGIN_PCT = 0` in `AppConstants`). Most modern TVs do not need adjustment.
+</Note>
+
+## Channel refresh
+
+Selecting "Actualizar canales" increments `refreshChannelsRequested`:
+
+```brightscript
+else if kind = "refreshChannels"
+    m.top.refreshChannelsRequested = m.top.refreshChannelsRequested + 1
+```
+
+`MainScene` observes this field and re-runs `PlaylistTask` using the current session credentials, then updates `MainScreen.channels` with the new result.
+
+## Logout
+
+Selecting "Cerrar sesión" sets `logoutRequested = true`. `MainScene` handles this by:
+
+1. Clearing saved credentials from the registry
+2. Stopping the player
+3. Navigating back to `OnboardingScreen` or `LoginScreen`
+
+## Server management panel
+
+The server manager is hidden behind a tap-unlock mechanism. It becomes available after pressing OK on "Acerca de GlobalTV" **five times**:
+
+```brightscript
+sub HandleAboutPressed()
+    m.serverAdminTapCount = m.serverAdminTapCount + 1
+    if m.serverAdminUnlocked <> true and m.serverAdminTapCount >= m.SERVER_ADMIN_UNLOCK_TAPS
+        m.serverAdminUnlocked = true
+        ResetServerAdminTapCount()
+        m.statusMessage = "Modo servidores habilitado."
+        RebuildMenu()
+        return
+    end if
+    ' ... shows version and support contact
+end sub
+```
+
+Once unlocked, a "Ver servidores" item appears in the main menu.
+
+### Server modes
+
+The panel has three modes managed by `m.mode`:
+
+| Mode | Constant | Description |
+|---|---|---|
+| Main settings | `MODE_MAIN` | Default view with all standard options |
+| Server list | `MODE_SERVERS` | Lists all saved server profiles |
+| Server actions | `MODE_ACTIONS` | Actions for a selected server |
+
+### Server actions
+
+When a server is selected in `MODE_SERVERS`, the panel enters `MODE_ACTIONS` with these options:
+
+```brightscript
+items.Push({ kind: "applyServer",  label: "Aplicar ahora" })
+items.Push({ kind: "testServer",   label: "Probar conexión" })
+items.Push({ kind: "editServer",   label: "Editar" })
+items.Push({ kind: "deleteServer", label: "Eliminar" })
+items.Push({ kind: "backToServers", label: "Cancelar" })
+```
+
+**Apply now** (`applyServer`) emits `applyServerId` and sets `applyServerRequested = true`. `MainScene` observes this and restarts the handshake, auth, and playlist pipeline using the new server.
+
+**Test connection** (`testServer`) runs a `ServerProbeTask` against the selected server's health endpoint without changing the active session.
+
+**Add/Edit server** opens a two-step `StandardKeyboardDialog` flow: first asks for the server name, then the base URL. The URL is validated and deduplicated before saving.
+
+<Warning>
+At least one server must always remain. Attempting to delete the last server shows the message "Debe quedar al menos un servidor."
+</Warning>
+
+### Server profiles storage
+
+Server profiles are serialized to JSON and stored in the Roku registry under `REG_KEY_SERVER_PROFILES = "serverProfiles"`. The `ServerManager` utility (`source/utils/ServerManager.brs`) provides all CRUD operations.
+
+## Layout
+
+The panel is a 1280×820px centered overlay with a dim background over the video. The left column shows a 6-item menu list (scrollable with a 6-row window). The right column shows a contextual detail panel that describes the currently focused action.
+
+```xml
+<!-- components/SettingsScreen/SettingsScreen.xml -->
+<Rectangle id="panelBg"     width="1280" height="820" color="0x57575782" />
+<Rectangle id="panelBorder" width="6"    height="820" color="0x71A9FFFF" />
+```
+
+## Interface fields
+
+```xml
+<!-- components/SettingsScreen/SettingsScreen.xml -->
+<field id="logoutRequested"          type="boolean" value="false" />
+<field id="closeSettings"            type="boolean" value="false" />
+<field id="safeAreaChanged"          type="integer" value="0" />
+<field id="refreshChannelsRequested" type="integer" value="0" />
+<field id="applyServerRequested"     type="boolean" value="false" />
+<field id="applyServerId"            type="string"  value="" />
+```

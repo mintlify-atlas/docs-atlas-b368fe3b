@@ -1,0 +1,104 @@
+---
+title: ChannelBanner
+description: Overlay card displayed when the viewer switches channels, showing the channel number, name, logo, and network status.
+---
+
+`ChannelBanner` is a SceneGraph `Group` component that slides into view whenever the active channel changes. It displays the channel number, name, category, and logo alongside a live-status label and a network connectivity indicator. After a fixed display period it fades out automatically.
+
+## Display timing
+
+Timing constants are defined in `AppConstants`:
+
+| Constant | Value | Description |
+|---|---|---|
+| `BANNER_MS` | `3000` ms | How long the banner remains fully visible before fading |
+| `BANNER_FADE_MS` | `300` ms | Approximate fade-out duration (6 ticks × 50 ms timer) |
+
+Internally, a `hideTimer` with `duration="3"` (seconds) triggers the fade sequence. A 50 ms repeating `fadeTimer` drives opacity from `1.0` to `0.0` in steps of approximately `0.1667` per tick.
+
+## Interface fields
+
+<ParamField body="channelData" type="assocarray">
+  Associative array describing the channel to display. Setting this field resets and shows the banner immediately. Triggers `onChannelDataChanged`.
+
+  | Key | Type | Description |
+  |---|---|---|
+  | `number` | integer | Channel number shown in `lblNumber` |
+  | `name` | string | Channel name shown in `lblName` |
+  | `group` | string | Category/group label shown in `lblCategory` |
+  | `logo` | string | URL of the channel logo image (`chLogo` Poster) |
+</ParamField>
+
+<ParamField body="networkOnline" type="boolean" default="true">
+  Controls the network status label (`lblNetwork`). `true` renders `"RED: OK"` in green (`0x9DFFB2FF`); `false` renders `"RED: OFF"` in red (`0xFF9D9DFF`). Triggers `onNetworkOnlineChanged`.
+</ParamField>
+
+<ParamField body="statusText" type="string" default="">
+  Custom status string displayed in `lblStatus`. Defaults to `"En vivo"` when empty. Triggers `onStatusTextChanged`.
+</ParamField>
+
+## What information it shows
+
+The banner card contains the following visual elements:
+
+<Columns cols={2}>
+  <Card title="Channel number" icon="hash">
+    Large bold label (`lblNumber`) showing the numeric channel ID.
+  </Card>
+  <Card title="Channel logo" icon="image">
+    Poster node (`chLogo`) rendered at 136 × 136 px design size. Hidden when `channelData.logo` is empty.
+  </Card>
+  <Card title="Channel name" icon="tv">
+    Medium bold label (`lblName`) with up to two lines of text.
+  </Card>
+  <Card title="Status" icon="radio">
+    Small label (`lblStatus`) for playback state, e.g. `"En vivo"`.
+  </Card>
+  <Card title="Category" icon="tag">
+    Small label (`lblCategory`) showing the channel group.
+  </Card>
+  <Card title="Network indicator" icon="wifi">
+    Small label (`lblNetwork`) in the top-right corner showing `RED: OK` or `RED: OFF`.
+  </Card>
+</Columns>
+
+## XML component definition
+
+```xml
+<component name="ChannelBanner" extends="Group">
+    <interface>
+        <field id="channelData"   type="assocarray" onChange="onChannelDataChanged" />
+        <field id="networkOnline" type="boolean"    value="true" onChange="onNetworkOnlineChanged" />
+        <field id="statusText"    type="string"     value=""     onChange="onStatusTextChanged" />
+    </interface>
+    ...
+    <children>
+        <Rectangle id="bannerBg"     width="760"  height="236" color="0x14234FCC" />
+        <Rectangle id="bannerAccent" width="8"    height="236" color="0x2D57C1FF" />
+        <Label     id="lblNumber"    font="font:LargeBoldSystemFont" />
+        <Poster    id="chLogo"       width="136"  height="136" loadDisplayMode="scaleToFit" />
+        <Label     id="lblName"      font="font:MediumBoldSystemFont" maxLines="2" />
+        <Label     id="lblStatus"    font="font:SmallSystemFont" />
+        <Label     id="lblCategory"  font="font:SmallSystemFont" />
+        <Timer     id="hideTimer"    duration="3"    repeat="false" />
+        <Timer     id="fadeTimer"    duration="0.05" repeat="true" />
+    </children>
+</component>
+```
+
+## Triggering the banner
+
+Set `channelData` to display the banner for the new channel. The component immediately sets `opacity = 1.0`, updates all labels and the logo, then starts `hideTimer`. When `hideTimer` fires, `fadeTimer` begins decrementing opacity until the banner is invisible.
+
+```brightscript
+channelBanner.channelData = {
+    number: 12
+    name: "Canal 12 HD"
+    group: "Noticias"
+    logo: "https://cdn.example.com/logo-12.png"
+}
+```
+
+<Note>
+The banner uses a responsive layout computed by `ApplyResponsiveLayout` via `GTV_GetLayoutContext`. All design coordinates (e.g. 760 px wide card) are scaled uniformly to the actual display resolution.
+</Note>

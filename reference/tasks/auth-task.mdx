@@ -1,0 +1,159 @@
+---
+title: "AuthTask"
+description: "Background task that authenticates a user against the GlobalTV backend, resolves the active server, and writes session state to m.global."
+---
+
+`AuthTask` runs `RunAuth` on a worker thread. It resolves the best available server (LAN first, then WAN), posts credentials to `/auth/{user}/{pass}`, parses the JSON response, and signals success or a typed failure reason via the `result` and `done` output fields.
+
+<Note>
+`AuthTask` uses `TIMEOUT_AUTH` (15 000 ms) for the credential HTTP request — longer than the default `TIMEOUT_HTTP` — to allow for slow LAN servers.
+</Note>
+
+## XML component definition
+
+```xml AuthTask.xml
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="AuthTask" extends="Task">
+  <interface>
+    <!-- inputs -->
+    <field id="username"      type="string"     value="" />
+    <field id="password"      type="string"     value="" />
+    <!-- outputs -->
+    <field id="result"        type="assocarray" />
+    <field id="done"          type="boolean"    value="false" />
+    <field id="statusMessage" type="string"     value="" />
+    <field id="statusTick"    type="integer"    value="0" />
+  </interface>
+  <task functionName="RunAuth" />
+</component>
+```
+
+## Input fields
+
+<ParamField path="username" type="String">
+  The subscriber's username. Leading and trailing whitespace is stripped before use. An empty value causes an immediate failure with `errorMsg` set.
+</ParamField>
+
+<ParamField path="password" type="String">
+  The subscriber's password. Trimmed the same way as `username`.
+</ParamField>
+
+## Output fields
+
+<ParamField path="result" type="AssocArray">
+  Populated when `done` becomes `true`. Contains the fields listed in the [Result object](#result-object) section below.
+</ParamField>
+
+<ParamField path="done" type="Boolean">
+  Set to `true` once the task finishes, whether successful or not. Observe this field to know when `result` is ready.
+</ParamField>
+
+<ParamField path="statusMessage" type="String">
+  Human-readable progress string updated throughout the task (e.g. `"Conectando con servidor local..."`, `"Validando credenciales..."`). Suitable for display in the login screen.
+</ParamField>
+
+<ParamField path="statusTick" type="Integer">
+  Monotonically incremented every time `statusMessage` changes. Observe this integer field to detect message updates even when the string value is identical.
+</ParamField>
+
+## Result object
+
+The `result` assoc-array always contains these keys:
+
+| Key | Type | Description |
+|---|---|---|
+| `success` | Boolean | `true` when the user authenticated and the subscription is active |
+| `userId` | String | Subscriber user ID returned by the server, or `""` |
+| `streamUrl` | String | Reserved; currently always `""` |
+| `subscriberActive` | Boolean | `true` when the subscription is in good standing |
+| `subscriberDisabledReason` | String | Human-readable reason from the server when the account is inactive |
+| `errorCode` | Integer | One of the `AUTH_REASON_*` constants (see [Error codes](#error-codes)) |
+| `authReason` | Integer | Alias for `errorCode`; same value |
+| `errorMsg` | String | Localised error string suitable for display |
+| `rawBody` | String | Raw HTTP response body, useful for debugging |
+| `resolvedServer` | String | Base URL of the server that answered the request |
+
+## Error codes
+
+Defined in `AppConstants.brs`:
+
+| Constant | Value | Meaning |
+|---|---|---|
+| `AUTH_REASON_NONE` | `0` | No error; authentication succeeded |
+| `AUTH_REASON_NETWORK_DOWN` | `460` | Network unavailable or all servers timed out |
+| `AUTH_REASON_CREDENTIALS` | `401` | Wrong username or password |
+| `AUTH_REASON_INACTIVE` | `470` | Account exists but subscription is inactive |
+| `AUTH_REASON_PASSWORD_CHANGED` | `471` | Session revoked because credentials were rotated |
+
+## Function flow
+
+<Steps>
+  <Step title="Validate inputs">
+    `GTV_SafeTrim` strips whitespace from `username` and `password`. If either is empty the task sets `done = true` immediately with an error result.
+  </Step>
+  <Step title="Check network">
+    `GTV_IsOnline()` confirms a network interface is up. Failure sets `errorCode = AUTH_REASON_NETWORK_DOWN`.
+  </Step>
+  <Step title="Resolve server">
+    `GTV_ResolveServerForAuth()` iterates `GTV_ServerBuildAutoProbeList()` — LAN entries first, then WAN — pinging each with `GTV_PingServer()`. The first reachable server is used. `statusMessage` is updated at each probe step.
+  </Step>
+  <Step title="POST credentials">
+    Builds `server + "/auth/" + encUser + "/" + encPass` and calls `GTV_HttpGet(authUrl, TIMEOUT_AUTH)`. The 15 s timeout gives LAN servers extra time to respond.
+  </Step>
+  <Step title="Classify HTTP failure">
+    If the HTTP call fails, `GTV_AuthClassifyFailure()` maps the HTTP code and body to an `AUTH_REASON_*` constant and an appropriate `errorMsg`.
+  </Step>
+  <Step title="Parse subscriber status">
+    Inspects `subscriberStatus`, `subscriber_active`, and `active` fields (in that order) to determine whether the account is enabled. A `false` value triggers a failure path that emits `AUTH_REASON_INACTIVE` or `AUTH_REASON_PASSWORD_CHANGED`.
+  </Step>
+  <Step title="Write global state">
+    On success: sets `m.global.activeServer`, `m.global.isAuthenticated = true`, `m.global.subscriberActive = true`, and `m.global.userId`. Saves the resolved server via `GTV_RegSaveLastServer()`.
+  </Step>
+  <Step title="Signal completion">
+    Sets `m.top.result` and `m.top.done = true`.
+  </Step>
+</Steps>
+
+## AppConstants values used
+
+| Constant | Value | Used for |
+|---|---|---|
+| `TIMEOUT_AUTH` | `15000` ms | HTTP timeout for the credential request |
+| `TIMEOUT_HEALTH` | `2500` ms | Ping timeout inside `GTV_PingServer()` |
+| `SERVER_LAN_FORCE_RETRIES` | `3` | Maximum LAN probe attempts before falling back to WAN |
+| `PATH_AUTH_TPL` | `"/auth/{user}/{pass}"` | URL template for the auth endpoint |
+| `AUTH_REASON_*` | see table above | Typed failure codes written to `result.errorCode` |
+
+## Usage example
+
+```brightscript
+' Create and configure the task
+authTask = CreateObject("roSGNode", "AuthTask")
+authTask.username = m.top.usernameField.text
+authTask.password = m.top.passwordField.text
+
+' Observe the done flag on the main thread
+authTask.observeFieldScoped("done", "OnAuthDone")
+authTask.observeFieldScoped("statusMessage", "OnAuthStatus")
+
+' Start the task
+authTask.control = "RUN"
+
+' --- callback ---
+sub OnAuthDone()
+    r = m.authTask.result
+    if r.success
+        ' navigate to main screen
+    else
+        ShowError(r.errorMsg)
+    end if
+end sub
+
+sub OnAuthStatus()
+    m.statusLabel.text = m.authTask.statusMessage
+end sub
+```
+
+<Warning>
+Do not read `result` until `done` is `true`. The assoc-array may be partially populated while the task is still running.
+</Warning>

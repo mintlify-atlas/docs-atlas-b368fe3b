@@ -1,0 +1,84 @@
+---
+title: AdFormatB
+description: Corner overlay ad that renders a small image in one of the four corners of the video viewport.
+---
+
+`AdFormatB` is a SceneGraph `Group` component that renders a compact image overlay pinned to one of four corners of the video area. It shares the same fade animation mechanism as `AdFormatA` but defaults to a 10 % × 10 % size and uses corner-based positioning instead of edge-based positioning.
+
+## Interface fields
+
+<ParamField body="adConfig" type="assocarray">
+  Configuration object built by `AdManager.BuildNodeConfig`. Triggers `onAdConfigChanged`.
+
+  | Key | Type | Default | Description |
+  |---|---|---|---|
+  | `media_url` | string | — | URL of the overlay image |
+  | `position` | string | `"top-left"` | Corner: `top-left`, `top-right`, `bottom-left`, or `bottom-right` |
+  | `width_percent` | float | `10.0` | Image width as a percentage of the viewport width |
+  | `height_percent` | float | `10.0` | Image height as a percentage of the viewport height |
+  | `fit_mode` | string | `"fit"` | `"fill"` maps to `scaleToFill`; anything else maps to `scaleToFit` |
+  | `viewport` | assocarray | design size | `{x, y, w, h}` of the video playback area |
+</ParamField>
+
+<ParamField body="imageLoaded" type="boolean" default="false">
+  Set to `true` once the Poster reports a `ready` load status. `AdManager` observes this to start the impression session.
+</ParamField>
+
+<ParamField body="imageError" type="boolean" default="false">
+  Set to `true` if the Poster reports a `failed` load status. `AdManager` observes this to destroy the slot.
+</ParamField>
+
+## Visual behaviour and positioning
+
+The image dimensions are calculated as percentages of the viewport:
+
+```brightscript
+w = Int(sw * wPct / 100.0)   ' default wPct = 10.0
+h = Int(sh * hPct / 100.0)   ' default hPct = 10.0
+```
+
+The `position` value is normalised by `GTV_NormalizeCornerPosition` and mapped to one of four corners:
+
+| Position value | Placement |
+|---|---|
+| `top-left` *(default)* | Top-left corner of the viewport |
+| `top-right` | Top-right corner |
+| `bottom-left` | Bottom-left corner |
+| `bottom-right` | Bottom-right corner |
+
+Ambiguous values (e.g. `"top"` without a horizontal component) resolve to `top-right`. The viewport origin offset (`ox`, `oy`) is always added to the computed corner coordinates, so the overlay correctly tracks non-zero viewport origins.
+
+The fade animation uses the same 50 ms timer and ~0.1667-per-tick opacity stepping as `AdFormatA`.
+
+## XML component definition
+
+```xml
+<component name="AdFormatB" extends="Group">
+    <interface>
+        <field id="adConfig"     type="assocarray" onChange="onAdConfigChanged" />
+        <field id="imageLoaded"  type="boolean"    value="false" />
+        <field id="imageError"   type="boolean"    value="false" />
+    </interface>
+    <children>
+        <Poster id="adPoster" loadDisplayMode="scaleToFit" visible="false" />
+        <Timer  id="fadeTimer" duration="0.05" repeat="true" />
+    </children>
+</component>
+```
+
+## Slot keys
+
+`AdManager` assigns each Format B ad to one of four exclusive slots:
+
+| Slot key | Corner |
+|---|---|
+| `b:top-left` | Top-left |
+| `b:top-right` | Top-right |
+| `b:bottom-left` | Bottom-left |
+| `b:bottom-right` | Bottom-right |
+
+All four slots can be active simultaneously. A new ad for an occupied slot replaces the existing one if the ad signature changes.
+
+<Note>
+Format B uses the video playback viewport (`videoViewport`), not the base viewport. The overlay always tracks the active video area, matching the behaviour of Format A.
+</Note>

@@ -1,0 +1,113 @@
+---
+title: Sideload to a Roku device
+description: How to enable developer mode on a Roku and install the GlobalTV channel directly from the command line.
+---
+
+Sideloading deploys the channel directly to a Roku device over your local network. You need to do this for every development iteration before submitting to the Channel Store.
+
+## Prerequisites
+
+- Roku device on the same network as your development machine
+- `make`, `zip`, and `curl` installed ([see requirements](/build/makefile-targets#windows-requirements))
+- The device must be in developer mode (see step 1 below)
+
+## Enable developer mode
+
+<Steps>
+  <Step title="Enter the developer mode sequence on the Roku remote">
+    With the Roku home screen open, press the following buttons in order:
+
+    ```text
+    Home × 3   Up × 2   Right   Left   Right   Left   Right
+    ```
+
+    A developer settings screen will appear.
+  </Step>
+
+  <Step title="Enable developer mode and set a password">
+    Select **Enable installer and restart**. After the device restarts, you will be prompted to set a developer password. Choose a password you can remember — you will pass it as `ROKU_PASS` in every `make` command.
+  </Step>
+
+  <Step title="Note the device IP address">
+    The developer settings screen shows the device IP address (e.g., `192.168.1.100`). You can also find it under **Settings → Network → About** on the Roku. Note it down as your `ROKU_IP`.
+  </Step>
+</Steps>
+
+## Install the channel
+
+<Steps>
+  <Step title="Run make install">
+    From the project root, run:
+
+    ```bash
+    make install ROKU_IP=192.168.1.100 ROKU_PASS=yourpass
+    ```
+
+    This builds `out/GlobalTV.zip` first (running `make zip` automatically), then POSTs it to the Roku's `/plugin_install` endpoint.
+  </Step>
+
+  <Step title="Check the result">
+    The Makefile prints the result to the terminal:
+
+    ```text
+    >>> [install] Sideload en http://192.168.1.100...
+    >>> [install] HTTP 200
+    >>> [install] Resultado: Install Success
+    >>> [install] Listo. Revisar el Roku.
+    ```
+
+    If the result is not immediately clear from the terminal output, open `out/_install_response.html` in a browser to see the full Roku installer response.
+  </Step>
+
+  <Step title="Verify on the device">
+    The GlobalTV channel should launch automatically on the Roku after a successful install. If it does not, open the Roku developer dashboard at `http://<ROKU_IP>` to confirm the app is installed.
+  </Step>
+</Steps>
+
+## Install response meanings
+
+| Response | Meaning |
+|---|---|
+| `Install Success` | The channel was installed and is ready to use. |
+| `Identical` | The zip you uploaded is byte-for-byte identical to what's already installed. No action needed. |
+| `Install Failure` | The installation failed. Check `out/_install_response.html` for details. |
+
+<Tip>
+After every sideload, review `out/_install_response.html`. Even a `200 HTTP` response can contain an `Install Failure` message if the channel zip has a structural problem.
+</Tip>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="curl: (7) Failed to connect — wrong IP or device unreachable">
+    - Confirm the Roku and your machine are on the same network segment.
+    - Double-check the IP shown in **Settings → Network → About** on the Roku.
+    - Try pinging the device: `ping 192.168.1.100`.
+    - Some routers isolate devices on guest networks — use the main network.
+  </Accordion>
+
+  <Accordion title="HTTP 401 Unauthorized — wrong password">
+    The `ROKU_PASS` you passed does not match the developer password set on the device.
+
+    To reset the developer password:
+    1. Enter the developer mode sequence again (Home×3 Up×2 Right Left Right Left Right).
+    2. Select **Enable installer and restart**.
+    3. Set a new password when prompted.
+  </Accordion>
+
+  <Accordion title="Install Failure in the response HTML">
+    Common causes:
+
+    - `manifest` is not at the root of the zip (the Makefile handles this correctly — check that you are not using a custom zip command).
+    - A required `manifest` field is missing or malformed. Run `make check` to verify.
+    - The zip contains a file with a path that conflicts with Roku's expectations.
+
+    Open `out/_install_response.html` in a browser for the specific error message from the Roku installer.
+  </Accordion>
+
+  <Accordion title="Developer mode sequence not working">
+    - Make sure you are on the Roku home screen (not inside an app) when entering the sequence.
+    - Press each button deliberately — the sequence is not a shortcut and must be entered exactly.
+    - Some Roku models require the remote to be paired before developer mode can be enabled.
+  </Accordion>
+</AccordionGroup>

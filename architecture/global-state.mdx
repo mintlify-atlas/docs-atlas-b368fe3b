@@ -1,0 +1,282 @@
+---
+title: Global state
+description: Reference for all m.global fields initialised by GTV_InitGlobalState() in AppState.brs, including types, defaults, and how components observe them.
+---
+
+All shared runtime state in GlobalTV lives in a single SceneGraph node accessible throughout the component tree as `m.global`. The node is populated once during startup by `GTV_InitGlobalState()` in `source/AppState.brs`.
+
+## Initialisation
+
+`MainScene.init()` is the first code that runs on the render thread. Its first action is calling `GTV_InitGlobalState()`:
+
+```brightscript
+' components/MainScene.brs
+sub init()
+    GTV_InitGlobalState()
+    ' ... rest of init
+end sub
+```
+
+```brightscript
+' source/AppState.brs
+sub GTV_InitGlobalState()
+    m.global.addFields({
+        activeServer        : "",
+        realtimeMode        : "polling",
+        isOnline            : true,
+        hasInternet         : true,
+
+        isAuthenticated     : false,
+        username            : "",
+        rokuEmail           : "",
+        userId              : "",
+        subscriberActive    : false,
+        userInactiveReason  : "",
+        authNotice          : "",
+        authReasonCode      : 0,
+
+        channelList         : [],
+        categories          : [],
+        currentChannelIndex : 0,
+        currentChannelId    : "",
+        overlaySelectedChannelIndex  : -1,
+        overlayHasManualContext      : false,
+        overlaySelectedCategoryIndex : 0,
+        overlaySelectedRowIndex      : -1,
+
+        playerState         : "stopped",
+        isOverlayActive     : false,
+
+        adsVersion          : 0,
+        adsNextCheckAt      : 0,
+
+        deviceId            : "",
+        deviceModel         : "",
+        osVersion           : "",
+        rida                : "",
+        lat                 : false,
+        deviceIp            : "",
+        deviceTimezone      : 0,
+
+        launchDeepLink      : invalid,
+        inputDeepLink       : invalid,
+
+        appLaunchBeaconSent : false
+    })
+end sub
+```
+
+`addFields` registers every key on the global node so that any component can observe or write to them.
+
+## Observing global fields
+
+Components use `m.global.observeField()` to react to state changes without polling:
+
+```brightscript
+' Example from a hypothetical component
+m.global.observeField("isAuthenticated", "OnAuthStateChanged")
+m.global.observeField("playerState",     "OnPlayerStateChanged")
+m.global.observeField("isOnline",        "OnConnectivityChanged")
+```
+
+Writing a field from any component immediately notifies all observers on the render thread:
+
+```brightscript
+' MainScene writing after successful auth
+m.global.isAuthenticated = true
+m.global.userId          = res.userId
+```
+
+<Note>
+Because `m.global` is a SceneGraph node, field writes and observer callbacks are always dispatched on the render thread regardless of which task triggered the write.
+</Note>
+
+## Field reference
+
+### Network
+
+<ParamField path="activeServer" type="string" default="(empty string)">
+  Base URL of the currently active backend server (e.g. `"https://admin.globaltv.lat"`). Set by `MainScene` after a successful handshake or server switch from Settings. Read by all task nodes to build API request URLs.
+</ParamField>
+
+<ParamField path="realtimeMode" type="string" default="'polling'">
+  Realtime update strategy. Currently always `"polling"`. Reserved for future server-push modes.
+</ParamField>
+
+<ParamField path="isOnline" type="boolean" default="true">
+  Whether the device has a network interface that appears up. Set by `ConnectivityTask` and reset to `true` by `MarkSessionNetworkHealthy()` after any successful API call.
+</ParamField>
+
+<ParamField path="hasInternet" type="boolean" default="true">
+  Whether the device can reach the internet (DNS / HTTP reachability). Distinct from `isOnline` to allow distinguishing LAN-only from full connectivity. Set by `ConnectivityTask`.
+</ParamField>
+
+### Auth
+
+<ParamField path="isAuthenticated" type="boolean" default="false">
+  `true` after a successful auth response from `AuthTask`. Cleared to `false` by `ClearSessionCatalogState()` on logout or session expiry.
+</ParamField>
+
+<ParamField path="username" type="string" default="(empty string)">
+  Authenticated username. Written by `MainScene` from `LoginScreen.loginResult` or from saved registry credentials during auto-login.
+</ParamField>
+
+<ParamField path="rokuEmail" type="string" default="(empty string)">
+  Roku account email obtained via the on-device auth flow (`getUserData`). Empty string when the user declines or the flow is skipped.
+</ParamField>
+
+<ParamField path="userId" type="string" default="(empty string)">
+  Backend user ID returned by the auth endpoint. Cleared on logout.
+</ParamField>
+
+<ParamField path="subscriberActive" type="boolean" default="false">
+  `true` when the backend reports the subscriber's account is active. Used by auth failure classification to distinguish inactive-account errors from credential errors.
+</ParamField>
+
+<ParamField path="userInactiveReason" type="string" default="(empty string)">
+  Human-readable reason string for an inactive or suspended account, sourced from the backend response. Displayed in `UserInactiveDialog`.
+</ParamField>
+
+<ParamField path="authNotice" type="string" default="(empty string)">
+  One-time notice message shown on the login screen after a forced logout (e.g. password changed). Cleared after display.
+</ParamField>
+
+<ParamField path="authReasonCode" type="integer" default="0">
+  Numeric failure reason code. Values are defined in `AppConstants()`:
+
+  | Value | Constant | Meaning |
+  |---|---|---|
+  | `0` | `AUTH_REASON_NONE` | No error |
+  | `401` | `AUTH_REASON_CREDENTIALS` | Wrong username or password |
+  | `460` | `AUTH_REASON_NETWORK_DOWN` | Network unreachable |
+  | `470` | `AUTH_REASON_INACTIVE` | Account inactive |
+  | `471` | `AUTH_REASON_PASSWORD_CHANGED` | Password changed remotely |
+</ParamField>
+
+### Channels
+
+<ParamField path="channelList" type="array" default="[]">
+  Array of channel objects built by `PlaylistTask` from the M3U8 playlist. Each object contains at minimum `contentId`, stream URL, and metadata. Cleared on logout.
+</ParamField>
+
+<ParamField path="categories" type="array" default="[]">
+  Array of category objects grouping channels for the `MainScreen` grid. Built alongside `channelList` by `PlaylistTask`.
+</ParamField>
+
+<ParamField path="currentChannelIndex" type="integer" default="0">
+  Flat index into `channelList` for the channel currently loaded in `PlayerScreen`. Written by `PlayerScreen` when playback starts or changes.
+</ParamField>
+
+<ParamField path="currentChannelId" type="string" default="(empty string)">
+  `contentId` of the channel currently loaded in `PlayerScreen`. Used by `RunPlaylistRefresh()` to restore the same channel after a catalog refresh.
+</ParamField>
+
+<ParamField path="overlaySelectedChannelIndex" type="integer" default="-1">
+  The channel index that the overlay cursor is on. `-1` means no explicit selection. Read by `MainScene` to sync focus when the overlay is opened.
+</ParamField>
+
+<ParamField path="overlayHasManualContext" type="boolean" default="false">
+  `true` when the user has manually navigated within the overlay (away from the auto-synced position). Controls whether `OnRequestOverlay()` restores a saved category/row position or re-syncs to the playing channel.
+</ParamField>
+
+<ParamField path="overlaySelectedCategoryIndex" type="integer" default="0">
+  Category tab index saved when the overlay is dismissed with a manual context. Restored on the next overlay open when `overlayHasManualContext` is `true`.
+</ParamField>
+
+<ParamField path="overlaySelectedRowIndex" type="integer" default="-1">
+  Row index within the selected category saved when the overlay is dismissed. `-1` means no saved row.
+</ParamField>
+
+### Player
+
+<ParamField path="playerState" type="string" default="'stopped'">
+  Current playback state string. Expected values: `"stopped"`, `"buffering"`, `"playing"`, `"error"`. Written by `PlayerScreen`; read by ad and overlay components.
+</ParamField>
+
+<ParamField path="isOverlayActive" type="boolean" default="false">
+  `true` while `MainScreen` is visible in overlay mode on top of the player. Written by `SetOverlayActive()` in `MainScene`. Components can observe this field to pause non-critical work while the overlay is up.
+</ParamField>
+
+### Ads
+
+<ParamField path="adsVersion" type="integer" default="0">
+  Monotonically-incrementing version counter for the active ad snapshot. `AdsPollingTask` increments this when a new ad payload is available, triggering observers in `AdManager`.
+</ParamField>
+
+<ParamField path="adsNextCheckAt" type="integer" default="0">
+  Unix timestamp (seconds) of the next scheduled ad poll. Written by `AdsPollingTask` after each successful check. A value of `0` means check immediately.
+</ParamField>
+
+### Device
+
+<ParamField path="deviceId" type="string" default="(empty string)">
+  Roku device serial number or equivalent unique identifier. Populated during the handshake / device-info collection phase.
+</ParamField>
+
+<ParamField path="deviceModel" type="string" default="(empty string)">
+  Roku model string (e.g. `"4800X"`). Sent to the backend in metrics and handshake payloads.
+</ParamField>
+
+<ParamField path="osVersion" type="string" default="(empty string)">
+  Roku OS version string. Sent to the backend for compatibility tracking.
+</ParamField>
+
+<ParamField path="rida" type="string" default="(empty string)">
+  Roku ID for Advertisers (RIDA). Used by the ads subsystem for targeting. Respects the user's limit-ad-tracking (LAT) preference.
+</ParamField>
+
+<ParamField path="lat" type="boolean" default="false">
+  `true` when the user has enabled Limit Ad Tracking on their Roku device. When `true`, `rida` must not be used for behavioural targeting.
+</ParamField>
+
+<ParamField path="deviceIp" type="string" default="(empty string)">
+  Device external IP address. Collected during handshake and included in ad-targeting parameters.
+</ParamField>
+
+<ParamField path="deviceTimezone" type="integer" default="0">
+  Device timezone offset in seconds from UTC. Used for time-sensitive ad scheduling.
+</ParamField>
+
+### Deep links
+
+<ParamField path="launchDeepLink" type="assocarray" default="invalid">
+  Raw deep-link payload from a cold-start launch. Written by `main.brs` when `args` contains `mediaType=live`. Triggers the `onLaunchDeepLink` observer in `MainScene`, which stores it as `m.pendingDeepLink` until the channel list is available.
+</ParamField>
+
+<ParamField path="inputDeepLink" type="assocarray" default="invalid">
+  Raw deep-link payload from a warm-start input event. Written by `main.brs` when an `roInputEvent` contains `mediaType=live`. Triggers the `onInputDeepLink` observer in `MainScene`.
+</ParamField>
+
+### Lifecycle
+
+<ParamField path="appLaunchBeaconSent" type="boolean" default="false">
+  `true` after the `AppLaunchComplete` beacon has been sent to the Roku platform. Set by `MainScreen` once the channel grid has rendered. Prevents duplicate beacons on playlist refresh or channel switch.
+</ParamField>
+
+## Writing patterns
+
+`MainScene` is the primary writer for most fields. Other components write only the fields they own:
+
+```brightscript
+' Auth success — MainScene writes auth fields
+m.global.isAuthenticated = true
+m.global.authReasonCode  = AppConstants().AUTH_REASON_NONE
+
+' Session reset — MainScene clears catalog state
+sub ClearSessionCatalogState()
+    m.global.isAuthenticated    = false
+    m.global.userId             = ""
+    m.global.channelList        = []
+    m.global.categories         = []
+    m.global.currentChannelIndex = 0
+    m.global.currentChannelId   = ""
+    m.global.playerState        = "stopped"
+    m.global.adsVersion         = 0
+    m.global.adsNextCheckAt     = 0
+    m.global.subscriberActive   = false
+end sub
+```
+
+<Warning>
+Task nodes run on background threads. They must not write to `m.global` directly mid-task — results should be passed back via the task node's output fields, and `MainScene` (on the render thread) writes to `m.global` in the observer callback.
+</Warning>

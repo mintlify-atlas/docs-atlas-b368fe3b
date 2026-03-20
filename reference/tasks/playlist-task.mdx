@@ -1,0 +1,124 @@
+---
+title: "PlaylistTask"
+description: "Background task that downloads and parses the M3U/HLS channel playlist for an authenticated subscriber."
+---
+
+`PlaylistTask` runs `RunPlaylist` on a worker thread. It builds a playlist URL from the active server and the subscriber's credentials, fetches it with up to `RETRY_MAX` retries and automatic failover across the server sequence, then parses the M3U body and writes the channel list and category list to `m.global`.
+
+## XML component definition
+
+```xml PlaylistTask.xml
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="PlaylistTask" extends="Task">
+  <interface>
+    <!-- inputs -->
+    <field id="username" type="string" value="" />
+    <field id="password" type="string" value="" />
+    <!-- outputs -->
+    <field id="result"   type="assocarray" />
+    <field id="done"     type="boolean"    value="false" />
+  </interface>
+  <task functionName="RunPlaylist" />
+</component>
+```
+
+## Input fields
+
+<ParamField path="username" type="String">
+  The subscriber's username. Must match the credentials used during authentication.
+</ParamField>
+
+<ParamField path="password" type="String">
+  The subscriber's password.
+</ParamField>
+
+## Output fields
+
+<ParamField path="result" type="AssocArray">
+  Populated when `done` becomes `true`. See the [Result object](#result-object) section for all keys.
+</ParamField>
+
+<ParamField path="done" type="Boolean">
+  Set to `true` when the task finishes. Observe this field to know when `result` is ready.
+</ParamField>
+
+## Result object
+
+| Key | Type | Description |
+|---|---|---|
+| `success` | Boolean | `true` when channels were fetched and parsed successfully |
+| `channels` | Array | Parsed channel objects from `GTV_ParseM3U()`, each with `name`, `number`, `url`, `logo`, and `group` |
+| `categories` | Array | Unique category/group strings extracted from the playlist |
+| `errorMsg` | String | Localised error string on failure |
+| `errorCode` | Integer | `AUTH_REASON_*` constant on auth failure, or `AUTH_REASON_NONE` on success |
+| `authReason` | Integer | Same as `errorCode` |
+| `rawBody` | String | Raw HTTP response body on failure, for debugging |
+| `httpCode` | Integer | HTTP status code of the last attempt |
+
+## Error codes
+
+See [AuthTask error codes](/reference/tasks/auth-task#error-codes) for the full `AUTH_REASON_*` table. PlaylistTask maps HTTP failures to the same constants.
+
+## Function flow
+
+<Steps>
+  <Step title="Validate credentials">
+    If either `username` or `password` is empty, the task sets `done = true` with `errorMsg = "Credenciales vacías"` immediately.
+  </Step>
+  <Step title="Resolve server">
+    Reads `m.global.activeServer` (set by a previous `AuthTask` or `HandshakeTask` run). If empty, calls `GTV_FindActiveServer()` to probe the server list.
+  </Step>
+  <Step title="Build playlist URL">
+    Constructs `server + "/auth/" + encUser + "/" + encPass + "/playlist/m3u8/hls"` matching `PATH_PLAYLIST_TPL`.
+  </Step>
+  <Step title="Fetch with retries">
+    Calls `GTV_HttpGet(url, TIMEOUT_HTTP)` in a loop up to `RETRY_MAX` (3) times. On a network error (`code = -1`), advances to the next server in `GTV_ServerBuildRequestSequence()`. Stops immediately on any other HTTP error code.
+  </Step>
+  <Step title="Classify HTTP failure">
+    Uses `GTV_AuthClassifyFailure()` to map auth-related HTTP codes to `AUTH_REASON_*` constants and sets `errorMsg` accordingly.
+  </Step>
+  <Step title="Parse M3U">
+    Passes `resp.body` to `GTV_ParseM3U()`. Logs warnings if any channels were dropped for missing or duplicate channel numbers, or if fallback numbers were assigned.
+  </Step>
+  <Step title="Write global state">
+    On success, writes `m.global.channelList` and `m.global.categories` for use by `MainScreen`.
+  </Step>
+  <Step title="Signal completion">
+    Sets `m.top.result` and `m.top.done = true`.
+  </Step>
+</Steps>
+
+## AppConstants values used
+
+| Constant | Value | Used for |
+|---|---|---|
+| `TIMEOUT_HTTP` | `12000` ms | HTTP timeout for each playlist fetch attempt |
+| `RETRY_MAX` | `3` | Maximum number of fetch attempts before giving up |
+| `PATH_PLAYLIST_TPL` | `"/auth/{user}/{pass}/playlist/m3u8/hls"` | URL template for the playlist endpoint |
+| `AUTH_REASON_*` | see [AuthTask](/reference/tasks/auth-task#error-codes) | Typed failure codes written to `result.errorCode` |
+
+## Usage example
+
+```brightscript
+' Run immediately after AuthTask succeeds
+playlistTask = CreateObject("roSGNode", "PlaylistTask")
+playlistTask.username = m.credentials.username
+playlistTask.password = m.credentials.password
+
+playlistTask.observeFieldScoped("done", "OnPlaylistDone")
+playlistTask.control = "RUN"
+
+sub OnPlaylistDone()
+    r = m.playlistTask.result
+    if r.success
+        ' m.global.channelList and m.global.categories are now populated
+        m.mainScreen.visible = true
+    else
+        ShowError(r.errorMsg)
+    end if
+end sub
+```
+
+<Note>
+On success, `m.global.channelList` and `m.global.categories` are written directly by the task. You do not need to copy them out of `result.channels` — though `result.channels` contains the same data.
+</Note>

@@ -1,0 +1,92 @@
+---
+title: "ServerProbeTask"
+description: "One-shot background task that tests reachability of a given server URL and returns a success/failure result."
+---
+
+`ServerProbeTask` runs `RunServerProbe` on a worker thread. It normalises the input URL, calls `GTV_PingServer()`, and writes a simple result object. The task completes immediately — it does not loop.
+
+## XML component definition
+
+```xml ServerProbeTask.xml
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="ServerProbeTask" extends="Task">
+  <interface>
+    <!-- input -->
+    <field id="baseUrl" type="string"     value="" />
+    <!-- outputs -->
+    <field id="result"  type="assocarray" />
+    <field id="done"    type="boolean"    value="false" />
+  </interface>
+  <task functionName="RunServerProbe" />
+</component>
+```
+
+## Input fields
+
+<ParamField path="baseUrl" type="String">
+  The server URL to probe (e.g. `"http://192.168.1.50:3333"` or `"https://admin.globaltv.lat"`). The value is normalised by `GTV_ServerNormalizeBaseUrl()` before use. If empty after normalisation, the task sets `done = true` immediately without making a network request.
+</ParamField>
+
+## Output fields
+
+<ParamField path="result" type="AssocArray">
+  Populated when `done` becomes `true`. See the [Result object](#result-object) section.
+</ParamField>
+
+<ParamField path="done" type="Boolean">
+  Set to `true` once the probe finishes (success or failure).
+</ParamField>
+
+## Result object
+
+| Key | Type | Description |
+|---|---|---|
+| `success` | Boolean | `true` if `GTV_PingServer()` reached the server within `TIMEOUT_HEALTH` |
+| `baseUrl` | String | The normalised URL that was probed |
+| `message` | String | Human-readable outcome, e.g. `"Conexion correcta con http://…"` or `"No se pudo conectar con http://…"` |
+
+## Function flow
+
+<Steps>
+  <Step title="Normalise URL">
+    Calls `GTV_ServerNormalizeBaseUrl(m.top.baseUrl)`. If the result is empty, sets `done = true` with `success = false` and returns.
+  </Step>
+  <Step title="Ping server">
+    Calls `GTV_PingServer(baseUrl)`, which sends a request to `baseUrl + PATH_HEALTH` with a `TIMEOUT_HEALTH` (2 500 ms) timeout.
+  </Step>
+  <Step title="Write result">
+    Sets `result.success`, `result.baseUrl`, and a descriptive `result.message`, then sets `done = true`.
+  </Step>
+</Steps>
+
+## AppConstants values used
+
+| Constant | Value | Used for |
+|---|---|---|
+| `TIMEOUT_HEALTH` | `2500` ms | Ping timeout inside `GTV_PingServer()` |
+| `PATH_HEALTH` | `"/health"` | Health-check endpoint appended to `baseUrl` during the ping |
+
+## Usage example
+
+```brightscript
+' Used from the settings screen to verify a manually entered server URL
+m.probeTask = CreateObject("roSGNode", "ServerProbeTask")
+m.probeTask.baseUrl = m.serverUrlField.text
+
+m.probeTask.observeFieldScoped("done", "OnProbeDone")
+m.probeTask.control = "RUN"
+
+sub OnProbeDone()
+    r = m.probeTask.result
+    if r.success
+        m.statusLabel.text = r.message  ' "Conexion correcta con ..."
+        SaveServerUrl(r.baseUrl)
+    else
+        m.statusLabel.text = r.message  ' "No se pudo conectar con ..."
+    end if
+end sub
+```
+
+<Note>
+The 2 500 ms ping timeout (`TIMEOUT_HEALTH`) is intentionally short. This task is designed for interactive use in the settings screen, where a quick response matters more than exhaustive retry logic. Use `HandshakeTask` or `ConnectivityTask` for more resilient server discovery.
+</Note>

@@ -5,3 +5,11 @@
 # Draft content
 drafts/
 *.draft.mdx
+
+# Starter kit leftovers (not in navigation)
+essentials/
+ai-tools/
+api-reference/
+development.mdx
+snippets/
+index.mdx

@@ -1,0 +1,150 @@
+---
+title: Connectivity
+description: How GlobalTV Roku monitors network state, updates global online/offline flags, and reacts to connectivity changes.
+---
+
+`ConnectivityTask` runs as a background SceneGraph task and periodically pings the active server's health endpoint to determine whether the app has internet access.
+
+## Health check endpoint
+
+```text
+GET {server}/health
+```
+
+Defined in `AppConstants.brs`:
+
+```brightscript
+PATH_HEALTH    : "/health"
+TIMEOUT_HEALTH : 2500
+```
+
+The health check uses a short timeout of `TIMEOUT_HEALTH = 2500ms` to detect connectivity quickly without blocking the UI.
+
+## Check interval
+
+The internal poll interval used inside `ConnectivityTask` is `10000ms` (10 seconds), hardcoded in the task loop:
+
+```brightscript
+sub RunConnectivityTask()
+    port     = CreateObject("roMessagePort")
+    interval = 10000
+    ...
+    while true
+        msg = wait(interval, port)
+        ...
+        DoCheck()
+    end while
+end sub
+```
+
+<Note>
+`NET_RETRY_MS = 30000` is defined in `AppConstants.brs` and is used by other parts of the app (such as error dialogs) as a suggested retry interval. The connectivity task itself uses its own fixed 10-second loop.
+</Note>
+
+## DoCheck logic
+
+On each tick, `DoCheck()` resolves the server to ping and calls `GTV_PingServer()`:
+
+```brightscript
+sub DoCheck()
+    server = GTV_ServerNormalizeBaseUrl(m.global.activeServer)
+    if server = "" or server = invalid
+        server = GTV_ServerPrimaryConnectivityUrl()
+    end if
+
+    if server = "" or server = invalid
+        m.top.hasInternet = false
+        m.global.hasInternet = false
+        m.global.isOnline = GTV_IsOnline()
+        ...
+        return
+    end if
+
+    result = GTV_PingServer(server)
+
+    m.top.hasInternet    = result
+    m.global.hasInternet = result
+    m.global.isOnline    = GTV_IsOnline()
+    ...
+end sub
+```
+
+If no server is configured, `hasInternet` is set to `false` immediately.
+
+## Global state fields
+
+| Field | Type | Description |
+|---|---|---|
+| `m.global.isOnline` | `boolean` | Set by `GTV_IsOnline()` — reflects the Roku OS network interface state |
+| `m.global.hasInternet` | `boolean` | Set by the health ping result — true only if the server responds |
+
+Both fields are also exposed on the task node as `m.top.hasInternet` for observers on the task itself.
+
+<Note>
+`m.global.isOnline` reflects the Roku device's network interface state (Wi-Fi or Ethernet is connected), while `m.global.hasInternet` reflects actual server reachability. Both must be checked for a fully healthy connection.
+</Note>
+
+## State transitions
+
+The task tracks the last connectivity state to avoid flooding the log with repeated messages:
+
+```brightscript
+if result
+    if m.lastConnectivityState <> "online"
+        GTV_Log("ConnectivityTask", "Internet OK")
+        m.lastConnectivityState = "online"
+    end if
+else
+    if m.lastConnectivityState <> "offline"
+        GTV_Warn("ConnectivityTask", "No internet reachability")
+        m.lastConnectivityState = "offline"
+    end if
+end if
+```
+
+Possible `lastConnectivityState` values:
+
+| Value | Meaning |
+|---|---|
+| `"online"` | Server ping succeeded |
+| `"offline"` | Server ping failed |
+| `"missing_server"` | No server URL could be resolved |
+
+## How the app reacts to connectivity changes
+
+<AccordionGroup>
+  <Accordion title="Session auth check skipped">
+    `MainScene.OnSessionAuthTimer()` checks both `GTV_IsOnline()` and `m.global.hasInternet` before running a background session re-auth. If either is false, the check is deferred:
+
+    ```brightscript
+    if not GTV_IsOnline()
+        GTV_Warn("MainScene", "Session check skipped: network offline")
+        return
+    end if
+    if m.global.hasInternet <> invalid and m.global.hasInternet = false
+        GTV_Warn("MainScene", "Session check skipped: no internet")
+        return
+    end if
+    ```
+  </Accordion>
+  <Accordion title="Playlist network error">
+    When `PlaylistTask` gets HTTP code `-1` (timeout/network down), it classifies the error as `AUTH_REASON_NETWORK_DOWN` and `MainScene` shows an offline error dialog with a retry option.
+  </Accordion>
+  <Accordion title="Auth network error">
+    When `AuthTask` cannot reach the server, it sets `result.authReason = AUTH_REASON_NETWORK_DOWN` and returns immediately. `MainScene` shows the error screen.
+  </Accordion>
+  <Accordion title="Immediate check trigger">
+    Other parts of the app can force an immediate connectivity check by setting `m.top.checkNow = true` on the `ConnectivityTask` node. The task observes this field and calls `DoCheck()` immediately.
+  </Accordion>
+</AccordionGroup>
+
+## Forced server apply
+
+When the user switches servers in settings, `MainScene.ApplyServerNow()` resets connectivity state optimistically:
+
+```brightscript
+m.global.hasInternet = true
+m.global.isOnline    = true
+```
+
+The connectivity task will correct these values on its next tick if the new server is not reachable.

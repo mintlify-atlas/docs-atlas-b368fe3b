@@ -1,0 +1,86 @@
+---
+title: ErrorDialog
+description: Modal dialog shown when playback fails, an auth error occurs, or a network issue is detected, offering Retry and Back actions.
+---
+
+`ErrorDialog` is a SceneGraph `Group` component that presents a centred modal card with an error icon, a title, a configurable message, and two action buttons: **Reintentar** (Retry) and **Volver** (Back). It captures all remote control input while visible.
+
+## When it appears
+
+`ErrorDialog` is shown by the parent screen in response to:
+
+- **Playback error** — the video player reports a fatal stream error.
+- **Auth failure** — credentials are rejected (HTTP 401/403/404) or the session is invalidated.
+- **Network issue** — connectivity is lost during an active session (distinct from the initial offline state handled by `OfflineDialog`).
+
+## Interface fields
+
+<ParamField body="message" type="string" default="Error al reproducir el canal">
+  Body text displayed below the title label (`lblMessage`). Set this to a human-readable description of the failure before making the dialog visible.
+</ParamField>
+
+<ParamField body="retryRequested" type="boolean" default="false">
+  Set to `true` when the viewer selects **Reintentar** (OK key on the focused Retry button). The parent screen observes this field to re-attempt playback or re-authentication.
+</ParamField>
+
+<ParamField body="backRequested" type="boolean" default="false">
+  Set to `true` when the viewer selects **Volver** (OK key on the focused Back button, or the remote Back key). The parent screen observes this field to navigate away.
+</ParamField>
+
+## User actions
+
+| Action | Remote key | Result |
+|---|---|---|
+| Select Retry | `OK` (Retry focused) | `retryRequested = true` |
+| Select Back | `OK` (Back focused) | `backRequested = true` |
+| Press Back | `back` | `backRequested = true` |
+| Navigate buttons | `left` / `right` | Toggles focus between Retry and Back |
+
+The dialog opens with focus on the **Reintentar** button (`focusIndex = ED_BTN_RETRY = 0`). The focused button is highlighted with colour `0x4477DDFF`; the unfocused button uses `0x333344FF`.
+
+## XML component definition
+
+```xml
+<component name="ErrorDialog" extends="Group">
+    <interface>
+        <field id="message"        type="string"  value="Error al reproducir el canal" />
+        <field id="retryRequested" type="boolean" value="false" />
+        <field id="backRequested"  type="boolean" value="false" />
+    </interface>
+    ...
+    <children>
+        <!-- Full-screen dim overlay -->
+        <Rectangle id="dimBg" width="1920" height="1080" color="0x000000BB" />
+        <!-- Centred card (780 × 360 design px) -->
+        <Rectangle id="card" color="0x1A1A2EFF" />
+        <!-- Error icon -->
+        <Poster id="errorIcon" uri="pkg:/images/error-icon.png" />
+        <!-- Title (red, bold) -->
+        <Label id="lblTitle" text="Error de reproducción" color="0xE53935FF" />
+        <!-- Configurable message body -->
+        <Label id="lblMessage" color="0x9E9E9EFF" />
+        <!-- Retry button -->
+        <Rectangle id="btnRetryBg" color="0x2D57C1FF" />
+        <Label id="btnRetryLabel" text="Reintentar" />
+        <!-- Back button -->
+        <Rectangle id="btnBackBg" color="0x333344FF" />
+        <Label id="btnBackLabel" text="Volver" />
+    </children>
+</component>
+```
+
+## Usage example
+
+```brightscript
+' Show the error dialog with a custom message
+errorDialog.message = "No se pudo conectar al servidor de streaming."
+errorDialog.visible = true
+
+' Observe the outcome
+errorDialog.observeField("retryRequested", "OnRetry")
+errorDialog.observeField("backRequested", "OnBack")
+```
+
+<Warning>
+Both `retryRequested` and `backRequested` are edge-triggered boolean fields. Reset them to `false` before re-showing the dialog, otherwise a subsequent `true` write may not fire the observer.
+</Warning>

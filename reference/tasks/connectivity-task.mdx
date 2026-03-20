@@ -1,0 +1,96 @@
+---
+title: "ConnectivityTask"
+description: "Long-running background task that checks internet reachability every 10 seconds and updates m.global.hasInternet."
+---
+
+`ConnectivityTask` runs `RunConnectivityTask` as a persistent worker thread. It pings the active server every 10 seconds and updates `m.global.hasInternet` and `m.global.isOnline`. The task can also be triggered to check immediately via the `checkNow` input field.
+
+<Note>
+This task runs for the entire lifetime of the channel. Stop it only by setting `control = "stop"` when the channel is closing.
+</Note>
+
+## XML component definition
+
+```xml ConnectivityTask.xml
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="ConnectivityTask" extends="Task">
+  <interface>
+    <!-- output -->
+    <field id="hasInternet" type="boolean" value="true" />
+    <!-- input/trigger -->
+    <field id="checkNow"    type="boolean" value="false" />
+  </interface>
+  <task functionName="RunConnectivityTask" />
+</component>
+```
+
+## Input fields
+
+<ParamField path="checkNow" type="Boolean">
+  Toggle to `true` to trigger an immediate connectivity check outside the normal 10-second cycle. The task resets the field to `false` after the check completes.
+</ParamField>
+
+## Output fields
+
+<ParamField path="hasInternet" type="Boolean">
+  Updated after every check. `true` when `GTV_PingServer()` succeeds against the active server; `false` otherwise. The same value is mirrored to `m.global.hasInternet`.
+</ParamField>
+
+## Global state written
+
+In addition to the `hasInternet` field, the task updates two global fields directly:
+
+| Global field | Description |
+|---|---|
+| `m.global.hasInternet` | Mirror of the `hasInternet` output field |
+| `m.global.isOnline` | Result of `GTV_IsOnline()` (roNetworkInfo-based check) |
+
+## Function flow
+
+<Steps>
+  <Step title="Initial check">
+    `DoCheck()` is called once before the wait loop starts so that connectivity state is available immediately.
+  </Step>
+  <Step title="Wait loop">
+    Waits up to 10 000 ms on a message port that observes `checkNow` and `control`.
+  </Step>
+  <Step title="Handle control messages">
+    If `checkNow` fires, runs `DoCheck()` immediately and resets the field. If `control = "stop"`, the task returns.
+  </Step>
+  <Step title="Scheduled check">
+    When the wait times out (no message received), `DoCheck()` runs for the scheduled interval tick.
+  </Step>
+  <Step title="DoCheck">
+    Resolves the server URL from `m.global.activeServer` via `GTV_ServerNormalizeBaseUrl()`. Falls back to `GTV_ServerPrimaryConnectivityUrl()` if no active server is set. Calls `GTV_PingServer(server)` and writes the boolean result to `m.top.hasInternet`, `m.global.hasInternet`, and `m.global.isOnline`.
+  </Step>
+  <Step title="State-change logging">
+    Only logs when the connectivity state changes (`online` ↔ `offline` ↔ `missing_server`) to avoid flooding the log with repeated entries.
+  </Step>
+</Steps>
+
+## Usage example
+
+```brightscript
+' Start connectivity monitoring from MainScene
+m.connectivityTask = CreateObject("roSGNode", "ConnectivityTask")
+m.connectivityTask.observeFieldScoped("hasInternet", "OnConnectivityChanged")
+m.connectivityTask.control = "RUN"
+
+sub OnConnectivityChanged()
+    if m.connectivityTask.hasInternet
+        HideOfflineDialog()
+    else
+        ShowOfflineDialog()
+    end if
+end sub
+
+' Force an immediate check after recovering from sleep mode
+m.connectivityTask.checkNow = true
+
+' Stop when the channel is closing
+m.connectivityTask.control = "stop"
+```
+
+<Note>
+`hasInternet` reflects reachability to the **configured server**, not just general internet access. A device may have an active Wi-Fi connection but still return `false` if the GlobalTV backend is unreachable.
+</Note>

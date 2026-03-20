@@ -1,0 +1,222 @@
+---
+title: Player Screen
+description: Live stream playback screen with channel overlay, direct number entry, ad integration, freeze detection, and automatic reconnection.
+---
+
+The `PlayerScreen` handles all live stream playback for GlobalTV. It manages the `Video` node lifecycle, the channel banner overlay, direct channel number entry, connectivity monitoring, ad rendering, and error recovery.
+
+## Stream playback
+
+Streams are played as HLS (`streamFormat = "hls"`, `live = true`). The `Video` node fills the full safe area by default. URLs from the playlist are normalized before use to handle `hls://` and `hlss://` prefixes:
+
+```brightscript
+' components/PlayerScreen/PlayerScreen.brs
+function GTV_NormalizePlayerUrl(rawUrl as Dynamic) as String
+    url = GTV_PlayerTrimStr(rawUrl.ToStr())
+    lowerUrl = LCase(url)
+
+    if Left(lowerUrl, 6) = "hls://"
+        rest = Mid(url, 7)
+        ' Prepend http:// if missing
+        return "http://" + rest
+    end if
+
+    if Left(lowerUrl, 7) = "hlss://"
+        rest = Mid(url, 8)
+        ' Prepend https:// if missing
+        return "https://" + rest
+    end if
+
+    return url
+end function
+```
+
+A paused state is immediately corrected — live streams do not pause:
+
+```brightscript
+else if state = "paused"
+    GTV_Warn("PlayerScreen", "Paused state detected - forcing resume")
+    m.video.control = "play"
+    m.global.playerState = "playing"
+```
+
+## Channel overlay system
+
+The `ChannelBanner` overlay (`channelBanner` node) shows channel number, name, logo, group, and current status ("Conectando...", "En vivo", "Reconectando la transmisión", etc.). Network status is reflected in `m.banner.networkOnline`.
+
+The overlay is triggered by:
+
+- Pressing **Left** in the player → sets `m.top.requestOverlay`, which `MainScene` handles by setting `overlayMode = true` on `MainScreen`
+- Pressing **OK** once → `ArmSettingsShortcut()` is called and the banner shows "En vivo"
+- Pressing **OK** a second time while the shortcut is armed → opens `SettingsScreen`
+
+When `MainScreen` is in overlay mode, directional keys and OK are routed through `RouteOverlayKey()` to `MainScreen.HandleOverlayKey()`.
+
+## Number overlay (direct channel entry)
+
+The `NumberOverlay` node allows direct channel tuning by number. Any digit key press adds to the buffer:
+
+```brightscript
+' components/PlayerScreen/PlayerScreen.brs
+if IsDigitKey(key)
+    ResetSettingsShortcut()
+    if m.numberOverlay <> invalid
+        m.numberOverlay.callFunc("AddDigit", key)
+        return true
+    end if
+end if
+```
+
+When the user confirms or the entry times out, `numberCommitted` fires and the player tunes to the matching channel:
+
+```brightscript
+sub OnNumberCommitted()
+    committed = m.numberOverlay.numberCommitted
+    target = Val(committed)
+    idx = FindChannelIndexByNumber(target)
+    if idx >= 0
+        PlayChannel(idx)
+    else
+        m.banner.statusText = "Canal " + committed + " no disponible"
+    end if
+end sub
+```
+
+## Ad integration during playback
+
+Three tasks support the ad system:
+
+| Task | Purpose |
+|---|---|
+| `AdsPollingTask` | Handshake with ad backend, polls `active` snapshot |
+| `AdManager` | Renders ad formats A, B, C on top of video |
+| `MetricsTask` | Tracks impression events |
+
+Ad snapshots are matched to the current channel using a key scheme:
+
+```brightscript
+' components/PlayerScreen/PlayerScreen.brs
+function GTV_BuildAdChannelKey(ch as Object) as String
+    if ch.number <> invalid and ch.number.ToStr() <> ""
+        return "pos:" + ch.number.ToStr()
+    end if
+    if ch.id <> invalid and ch.id.ToStr() <> ""
+        return "id:" + ch.id.ToStr()
+    end if
+    return ""
+end function
+```
+
+For Format C ads, `AdManager` signals a `videoHeightReduction` and `videoOffsetY` to shrink and offset the video viewport, making room for the ad below:
+
+```brightscript
+sub OnVideoHeightReduction()
+    ApplyVideoViewportState()
+    SyncAdViewport()
+end sub
+```
+
+If the ad system signals all ads are hidden (`allAdsHidden`), the video is immediately restored to full size.
+
+## Error handling and reconnection
+
+Errors from the `Video` node trigger `OnVideoError()`. The player retries automatically up to `RETRY_MAX = 3` times with a 2-second delay between attempts:
+
+```brightscript
+sub OnVideoError()
+    ' ...
+    if m.retryCount < AppConstants().RETRY_MAX
+        m.retryCount = m.retryCount + 1
+        retryTimer = CreateObject("roSGNode", "Timer")
+        retryTimer.duration = 2
+        retryTimer.repeat = false
+        retryTimer.observeField("fire", "OnRetryTimer")
+        retryTimer.control = "start"
+    else
+        ShowError(GTV_BuildStreamErrorMessage(errCode, errMsg))
+    end if
+end sub
+```
+
+After `RETRY_MAX` failures, an `ErrorDialog` is shown with Retry and Back options.
+
+### Error classification
+
+<AccordionGroup>
+  <Accordion title="Inactive session (401/403)">
+    Detected by keywords such as `inactivo`, `subscriberStatus`, or HTTP 401/403 with `forbidden`. Stops the stream, sets `m.top.userInactive = true`, and navigates back to login.
+  </Accordion>
+  <Accordion title="Password changed (471)">
+    Detected by keywords like `password`, `cambi`, `token revoked`. Same flow as inactive session with `AUTH_REASON_PASSWORD_CHANGED`.
+  </Accordion>
+  <Accordion title="Auto-recoverable errors">
+    Timeout (`-1`), HTTP response errors, and connection errors set `m.lastErrorCanAutoRecover = true`. If network is restored while the error dialog is open, `RestartStream()` is called automatically without user interaction.
+  </Accordion>
+  <Accordion title="Stream finished">
+    A `finished` state on a live stream triggers `RestartStream()` immediately.
+  </Accordion>
+</AccordionGroup>
+
+## Freeze detection
+
+A watchdog timer (`watchdogTimer`) runs every **10 seconds** (`FREEZE_CHECK_MS = 10000ms`). It compares the current `video.position` against the last recorded value. If the position has not changed while the state is `playing`, the stream is considered frozen and restarted:
+
+```brightscript
+' components/PlayerScreen/PlayerScreen.brs
+' Timer duration defined in XML: duration="10"
+sub OnWatchdog()
+    state = m.video.state
+    if state <> "playing" then return
+
+    currentPos = m.video.position
+    if currentPos = m.lastPosition and m.lastPosition >= 0
+        GTV_Warn("PlayerScreen", "Stream frozen at position " + currentPos.ToStr() + " - restarting")
+        RestartStream()
+    end if
+
+    m.lastPosition = currentPos
+end sub
+```
+
+```xml
+<!-- components/PlayerScreen/PlayerScreen.xml -->
+<Timer id="watchdogTimer" duration="10" repeat="true"/>
+```
+
+<Note>
+`FREEZE_CHECK_MS = 10000` is defined in `AppConstants`. The XML timer `duration="10"` directly matches this value.
+</Note>
+
+## Connectivity monitoring
+
+A separate `ConnectivityTask` runs in the background and fires `OnConnectivityChanged()` when the internet state changes. A `netCheckTimer` also polls every **30 seconds** (`NET_RETRY_MS = 30000ms`).
+
+When connectivity is lost:
+1. The video is stopped
+2. An `OfflineDialog` is shown with a Retry button
+3. When connectivity is restored, `RestartStream()` is called automatically
+
+## Channel navigation within the player
+
+| Key | Action |
+|---|---|
+| Up | Play next channel (`currentIndex + 1`) |
+| Down | Play previous channel (`currentIndex - 1`) |
+| Left | Open `MainScreen` overlay |
+| Digit (0-9) | Append to number overlay buffer |
+| OK (first press) | Arm settings shortcut, show status hint |
+| OK (second press) | Open `SettingsScreen` |
+| Back | Exit player, return to `MainScreen` overlay |
+
+## Interface fields
+
+```xml
+<!-- components/PlayerScreen/PlayerScreen.xml -->
+<field id="channelIndex"   type="integer" value="-1" onChange="onChannelIndexChanged"/>
+<field id="requestOverlay" type="integer" value="0"/>
+<field id="closeOverlay"   type="integer" value="0"/>
+<field id="exitPlayer"     type="boolean" value="false"/>
+<field id="openSettings"   type="boolean" value="false"/>
+<field id="userInactive"   type="boolean" value="false"/>
+<field id="modalActive"    type="boolean" value="false"/>
+```

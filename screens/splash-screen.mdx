@@ -1,0 +1,91 @@
+---
+title: Splash Screen
+description: Startup screen shown while the app initializes, with a 1500ms minimum display time enforced by the manifest splash_min_time setting.
+---
+
+The `SplashScreen` component is the first visual the user sees when launching GlobalTV. It satisfies Roku certification requirements by declaring a splash image in the manifest and holding it on screen for the required minimum duration before the app proceeds to authentication or onboarding.
+
+## Purpose and timing
+
+The splash is displayed for **1500ms** (`SPLASH_MS = 1500` in `AppConstants`). This value aligns directly with the manifest's `splash_min_time` field, which instructs the Roku OS to keep the built-in splash visible until the channel is ready.
+
+```brightscript
+' source/AppConstants.brs
+SPLASH_MS : 1500
+```
+
+Once the timer fires, the component signals completion by setting a boolean field:
+
+```brightscript
+' components/SplashScreen/SplashScreen.brs
+sub OnTimerFire()
+    GTV_Log("SplashScreen", "Timer fired - splash done")
+    m.top.splashDone = true
+end sub
+```
+
+The XML timer that drives this is declared with `duration="1.5"` and `repeat="false"`:
+
+```xml
+<!-- components/SplashScreen/SplashScreen.xml -->
+<Timer
+    id="splashTimer"
+    duration="1.5"
+    repeat="false" />
+```
+
+## What it displays
+
+The screen has three visual layers:
+
+| Layer | Node | Purpose |
+|---|---|---|
+| Background | `Rectangle#bg` (`0x1A1A2EFF`) | Solid dark blue fill |
+| Splash image | `Poster#splashImg` | Full-screen brand image (`splash_hd.png` or `splash_fhd.png`) |
+| Fallback logo | `Poster#logoImg` | Shown only if the splash image fails to load |
+| Version label | `Label#versionLabel` | Bottom-right corner, reads from `AppConstants().APP_VERSION` |
+
+The splash image asset is selected based on the safe area dimensions at runtime:
+
+```brightscript
+' components/SplashScreen/SplashScreen.brs
+if safeW <= 1280 or safeH <= 720
+    splash.uri = "pkg:/images/splash_hd.png"
+else
+    splash.uri = "pkg:/images/splash_fhd.png"
+end if
+```
+
+### Fallback behavior
+
+If the splash poster fails to load, the component shows the `logoImg` fallback instead:
+
+```brightscript
+sub OnSplashLoadStatusChanged()
+    if m.splashImg = invalid or m.logoImg = invalid then return
+
+    statusText = LCase(m.splashImg.loadStatus.ToStr())
+    if InStr(1, statusText, "fail") > 0
+        m.logoImg.visible = true
+    else if InStr(1, statusText, "ready") > 0
+        m.logoImg.visible = false
+    end if
+end sub
+```
+
+## Transition to next screen
+
+The `SplashScreen` component exposes a single output field:
+
+```xml
+<field id="splashDone" type="boolean" value="false" />
+```
+
+When `splashDone` changes to `true`, `MainScene` observes the change and decides the next step:
+
+- If saved credentials exist in the registry → auto-login path (skip to `MainScreen`)
+- If no saved credentials → show `OnboardingScreen`
+
+<Note>
+The timer starts in `init()` immediately when the component is created. The splash is always shown for the full 1500ms regardless of how fast downstream tasks complete.
+</Note>

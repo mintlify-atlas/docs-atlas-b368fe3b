@@ -1,0 +1,120 @@
+---
+title: Network detector
+description: Functions for detecting Roku network connectivity and verifying reachability of the active GlobalTV backend server.
+---
+
+The network detector provides two layers of connectivity checking: a fast local check using `roDeviceInfo` to confirm a network interface is up, and a deeper check that probes the active server to confirm internet or LAN reachability.
+
+## Functions
+
+### GTV_IsOnline
+
+```brightscript
+function GTV_IsOnline() as Boolean
+```
+
+Checks whether the Roku device has an active network interface by calling `roDeviceInfo.GetConnectionType()`.
+
+**Return value** — `true` if `GetConnectionType()` returns a non-empty string (e.g. `"WiFiConnection"` or `"WiredConnection"`); `false` when the string is empty, indicating no network interface is up.
+
+<Note>
+`GTV_IsOnline` only checks that a physical connection exists. It does not verify that the connection has internet access or that the backend server is reachable.
+</Note>
+
+**Example**
+
+```brightscript
+if not GTV_IsOnline()
+    GTV_Warn("Network", "No network interface detected")
+    ' Show offline dialog
+end if
+```
+
+---
+
+### GTV_GetConnectionType
+
+```brightscript
+function GTV_GetConnectionType() as String
+```
+
+Returns the raw connection type string from `roDeviceInfo.GetConnectionType()`.
+
+**Return value** — A string such as `"WiFiConnection"`, `"WiredConnection"`, or `""` when offline.
+
+**Example**
+
+```brightscript
+connType = GTV_GetConnectionType()
+GTV_Log("Network", "Connection type: " + connType)
+```
+
+---
+
+### GTV_HasInternet
+
+```brightscript
+function GTV_HasInternet(activeServer as String) as Boolean
+```
+
+Performs a full connectivity check by first confirming a network interface is up (`GTV_IsOnline`), then pinging the backend server (`GTV_PingServer`).
+
+<ParamField path="activeServer" type="String" required>
+  The base URL of the server to ping. When empty (`""`), falls back to `GTV_ServerPrimaryConnectivityUrl()`, which returns the first LAN profile URL (or the first profile URL if no LAN profiles exist). Returns `false` if no URL can be determined.
+</ParamField>
+
+**Return value** — `true` only if both the network interface check and the server ping succeed.
+
+**Example**
+
+```brightscript
+activeServer = m.global.activeServer
+if GTV_HasInternet(activeServer)
+    GTV_Log("Connectivity", "Server reachable: " + activeServer)
+else
+    GTV_Warn("Connectivity", "Server unreachable")
+    ' Trigger reconnect flow
+end if
+```
+
+---
+
+## Integration with ConnectivityTask
+
+The `ConnectivityTask` polls `GTV_HasInternet` on a timer (every `NET_RETRY_MS` = 30 000 ms) and updates `m.global.isOnline`. The flow is:
+
+1. `ConnectivityTask` calls `GTV_HasInternet(m.global.activeServer)`.
+2. If `false`, it sets `m.global.isOnline = false` and shows the offline dialog.
+3. When `true` again, it restores `m.global.isOnline = true` and triggers a reconnect.
+
+---
+
+## LAN vs internet connectivity
+
+`GTV_HasInternet` does not distinguish between LAN and internet — it pings whichever server URL it receives. The distinction is made at the server profile level:
+
+| Profile type | Ping target                 | What a passing ping means              |
+|--------------|-----------------------------|----------------------------------------|
+| `lan`        | `http://172.17.11.2:3333`   | The local backend server is reachable  |
+| `wan`        | `https://admin.globaltv.lat`| The public internet backend is reachable |
+
+When `GTV_HasInternet` is called with an empty `activeServer`, it uses `GTV_ServerPrimaryConnectivityUrl()`, which always prefers the first LAN profile. This means connectivity checks default to the local server when one is configured.
+
+<Tip>
+To check public internet connectivity specifically, pass a WAN server URL directly rather than relying on the fallback.
+</Tip>
+
+---
+
+## Health check dependency
+
+Both `GTV_HasInternet` and `GTV_FindActiveServer` (in ServerManager) rely on `GTV_PingServer` from `HealthCheck.brs`. That function issues an HTTP GET to `<baseUrl>/health` with a `TIMEOUT_HEALTH = 2500 ms` timeout and treats any response with an HTTP status code below `500` as a passing ping.
+
+```brightscript
+' From HealthCheck.brs
+function GTV_PingServer(baseUrl as String) as Boolean
+    url = baseUrl + "/health"  ' PATH_HEALTH = "/health"
+    ' ... issues async GET with 2500ms timeout
+    ' Returns true for HTTP 200–499, false on timeout or 5xx
+end function
+```

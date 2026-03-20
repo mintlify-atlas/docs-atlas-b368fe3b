@@ -1,0 +1,147 @@
+---
+title: Architecture overview
+description: How the GlobalTV Roku channel is structured — directory layout, SceneGraph component tree, and core design patterns.
+---
+
+GlobalTV is a live-TV channel built with **BrightScript** and **SceneGraph XML** targeting Roku OS. The codebase follows the standard Roku channel layout and relies on three complementary patterns: a single shared global state node, task nodes for all network and background work, and SceneGraph's observer mechanism for inter-component communication.
+
+## Directory structure
+
+<Tree>
+  <Tree.Folder name="source" defaultOpen>
+    <Tree.File name="main.brs" />
+    <Tree.File name="AppConstants.brs" />
+    <Tree.File name="AppState.brs" />
+    <Tree.Folder name="utils" defaultOpen>
+      <Tree.File name="Logger.brs" />
+      <Tree.File name="RegistryManager.brs" />
+      <Tree.File name="ServerManager.brs" />
+      <Tree.File name="HttpClient.brs" />
+      <Tree.File name="HealthCheck.brs" />
+      <Tree.File name="NetworkDetector.brs" />
+    </Tree.Folder>
+  </Tree.Folder>
+  <Tree.Folder name="components" defaultOpen>
+    <Tree.File name="MainScene.xml" />
+    <Tree.File name="MainScene.brs" />
+    <Tree.Folder name="SplashScreen" />
+    <Tree.Folder name="OnboardingScreen" />
+    <Tree.Folder name="LoginScreen" />
+    <Tree.Folder name="MainScreen" />
+    <Tree.Folder name="PlayerScreen" />
+    <Tree.Folder name="SettingsScreen" />
+    <Tree.Folder name="tasks" />
+    <Tree.Folder name="ads" />
+    <Tree.Folder name="overlays" />
+  </Tree.Folder>
+  <Tree.File name="manifest" />
+  <Tree.File name="Makefile" />
+</Tree>
+
+### `source/` vs `components/`
+
+| Directory | Purpose |
+|---|---|
+| `source/` | Pure BrightScript code that runs in the main thread: app entry point, global state initialisation, constants, and utility libraries (logging, registry, HTTP, server selection). |
+| `components/` | SceneGraph components — each sub-folder contains an `.xml` interface declaration and a `.brs` behaviour file. Components run in their own render-thread scope. Task nodes under `components/tasks/` execute on background threads. |
+
+## Component hierarchy
+
+The SceneGraph tree at runtime looks like this:
+
+```text
+roSGScreen
+└── MainScene  (extends Scene)
+    ├── bgRect  (Rectangle — full-screen background)
+    ├── [loading Label]          ← transient, shown during async work
+    ├── SplashScreen             ← shown on cold start
+    ├── OnboardingScreen         ← shown when no saved credentials
+    ├── LoginScreen              ← username / password entry
+    ├── MainScreen               ← channel grid / overlay
+    ├── PlayerScreen             ← live video + ad layer
+    ├── SettingsScreen           ← server & safe-area config
+    ├── OfflineDialog            ← network error
+    ├── UserInactiveDialog       ← session-expired prompt
+    ├── ConfirmExitDialog        ← back-button exit confirmation
+    └── [Task nodes]             ← HandshakeTask, AuthTask,
+                                    PlaylistTask, AdsPollingTask,
+                                    ConnectivityTask, SessionAuthTask
+```
+
+At most one "screen" is active at a time. `MainScreen` and `PlayerScreen` are kept alive simultaneously once the user reaches the home state so that the channel overlay can be toggled without re-creating either node.
+
+## Key design patterns
+
+### Global state via `m.global`
+
+All shared runtime state lives in a single `roSGNode` accessible to every component as `m.global`. The node is initialised once by `MainScene.init()` calling `GTV_InitGlobalState()` from `source/AppState.brs`. Components read fields directly and write through the node to trigger observers elsewhere.
+
+```brightscript
+' source/AppState.brs
+sub GTV_InitGlobalState()
+    m.global.addFields({
+        activeServer     : "",
+        isAuthenticated  : false,
+        channelList      : [],
+        playerState      : "stopped",
+        ' ... (see Global state reference)
+    })
+end sub
+```
+
+### Task-based async work
+
+All network I/O is performed in dedicated `Task` nodes so the render thread never blocks. `MainScene` creates each task node, sets its input fields, sets `control = "RUN"`, and observes its `done` field to receive the result.
+
+```brightscript
+' components/MainScene.brs
+m.authTask          = CreateObject("roSGNode", "AuthTask")
+m.authTask.username = username
+m.authTask.password = password
+m.authTask.observeField("done", "OnAuthDone")
+m.authTask.control  = "RUN"
+```
+
+### Observer pattern
+
+SceneGraph field observers wire components together without direct references. A child component exposes an output field; the parent observes it and reacts in a callback.
+
+```brightscript
+' MainScene listening to SplashScreen
+splash.observeField("splashDone", "OnSplashDone")
+
+' MainScene listening to deep-link fields on itself
+m.top.observeField("currentDesignResolution", "OnSceneResolutionChanged")
+```
+
+### Periodic timers
+
+Background polling (session auth check, ads, connectivity) uses `roSGNode Timer` instances attached as children of `MainScene`. Timer durations and intervals come from constants in `AppConstants()`.
+
+```brightscript
+m.sessionAuthTimer          = CreateObject("roSGNode", "Timer")
+m.sessionAuthTimer.duration = Int(c.SESSION_AUTH_CHECK_MS / 1000)  ' default 420 s
+m.sessionAuthTimer.repeat   = true
+m.sessionAuthTimer.observeField("fire", "OnSessionAuthTimer")
+```
+
+## Technology stack
+
+<Columns cols={2}>
+  <Card title="BrightScript" icon="code">
+    Roku's scripting language. Used for all logic in both `source/` and `components/` `.brs` files.
+  </Card>
+  <Card title="SceneGraph XML" icon="file-code">
+    Declarative component definitions (`.xml`). Describe the component interface, script includes, and initial child nodes.
+  </Card>
+  <Card title="Roku OS" icon="tv">
+    Target platform. The channel runs inside a sandboxed `roSGScreen` created in `source/main.brs`.
+  </Card>
+  <Card title="Makefile" icon="terminal">
+    Build tooling: `make zip` packages the channel, `make install` sideloads it to a device via the Roku Developer Application Installer.
+  </Card>
+</Columns>
+
+<Note>
+The `manifest` file declares the channel version, splash screens, supported resolutions, and `supports_input_launch=1` (required for deep-link input events).
+</Note>

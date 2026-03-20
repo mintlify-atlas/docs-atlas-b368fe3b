@@ -1,0 +1,75 @@
+---
+title: NumberOverlay
+description: Floating overlay for direct channel number entry, accumulating up to three digits before tuning.
+---
+
+`NumberOverlay` is a SceneGraph `Group` component that appears when the viewer presses number keys on the remote. It accumulates up to three digits and emits the complete number after a 2-second idle period, allowing the app to tune directly to the entered channel.
+
+## Interface fields
+
+<ParamField body="numberCommitted" type="string" default="">
+  Written by `NumberOverlay` when digit entry times out (2 seconds after the last keypress). Contains the accumulated digit string (e.g. `"12"` or `"125"`). The parent screen observes this field to initiate channel tuning.
+</ParamField>
+
+## Font size
+
+The digit display uses `font:LargeBoldSystemFont`. The design constant `FONT_NUMBER = 72` (from `AppConstants`) documents the intended point size for this label.
+
+## How number entry works
+
+<Steps>
+  <Step title="Digit received">
+    The parent screen calls `AddDigit(d)` on the `NumberOverlay` node, passing a single digit string. The component appends the digit to the internal `m.digits` buffer (maximum 3 digits; the buffer resets when the limit is reached).
+  </Step>
+  <Step title="Overlay shown">
+    `opacity` is set to `1` and the `lblDigits` label is updated immediately. The viewer sees the accumulating number in the centre of the screen.
+  </Step>
+  <Step title="Commit timer restarted">
+    The 2-second `commitTimer` is stopped and restarted on every `AddDigit` call. This gives the viewer a full 2 seconds from the last digit press to add another digit.
+  </Step>
+  <Step title="Commit fires">
+    When `commitTimer` fires, `OnCommit` copies `m.digits` to `m.top.numberCommitted`, clears the display, and hides the overlay (`opacity = 0`).
+  </Step>
+  <Step title="Parent tunes the channel">
+    The parent screen receives the `numberCommitted` change event and looks up the matching channel by number.
+  </Step>
+</Steps>
+
+The `Clear` function can be called at any time to reset the buffer, hide the overlay, and stop the timer without committing.
+
+## XML component definition
+
+```xml
+<component name="NumberOverlay" extends="Group">
+    <interface>
+        <field id="numberCommitted" type="string" value="" />
+    </interface>
+    <children>
+        <Rectangle id="numBg"     width="300" height="180" color="0x101B42DD" />
+        <Rectangle id="numAccent" width="6"   height="180" color="0x2D57C1FF" />
+        <Label
+            id="lblDigits"
+            font="font:LargeBoldSystemFont"
+            horizAlign="center"
+            vertAlign="center"
+            width="300" height="180" />
+        <Timer id="commitTimer" duration="2" repeat="false" />
+    </children>
+</component>
+```
+
+## Layout
+
+The overlay is centred within the safe area. `ApplyResponsiveLayout` uses `GTV_GetLayoutContext` to scale the 300 × 180 px design box to the actual display resolution. A left-edge accent bar (`numAccent`, 6 px wide, `0x2D57C1FF`) provides a visual indicator matching the app's primary colour.
+
+```brightscript
+' Calling AddDigit from the parent screen key handler
+if key = "1" or key = "2" ... or key = "9" or key = "0"
+    numberOverlay.callFunc("AddDigit", key)
+    return true
+end if
+```
+
+<Note>
+The digit buffer resets to empty when a fourth digit is pressed, allowing the viewer to start a new sequence without needing to navigate away. This means pressing `1`, `2`, `3`, `4` results in `"4"` being committed, not `"1234"`.
+</Note>

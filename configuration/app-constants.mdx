@@ -1,0 +1,275 @@
+---
+title: "App constants"
+description: "Central configuration reference for AppConstants() — endpoints, timeouts, registry keys, colors, fonts, timing, and helper functions."
+---
+
+`AppConstants()` is a BrightScript function that returns an associative array containing every tunable value in the app. Screens, tasks, and utilities call `AppConstants()` to read configuration rather than embedding magic values inline.
+
+```brightscript
+function AppConstants() as Object
+    return {
+        SERVER_LIST: [
+            "http://172.17.11.2:3333",
+            "https://admin.globaltv.lat"
+        ],
+        ' ... all other constants
+    }
+end function
+```
+
+<Note>
+`AppConstants()` creates a new associative array on every call. It is intentionally stateless — callers should store the result in a local variable if accessing multiple fields.
+</Note>
+
+## Server list
+
+```brightscript
+SERVER_LIST: [
+    "http://172.17.11.2:3333",
+    "https://admin.globaltv.lat"
+]
+```
+
+`SERVER_LIST` provides the initial ordered list of backend servers. The app probes each server in turn using health checks and uses the first one that responds. LAN servers appear first so local deployments are preferred over the public endpoint.
+
+| Entry | Type | Description |
+|---|---|---|
+| `http://172.17.11.2:3333` | LAN | Local development server on the LAN segment. |
+| `https://admin.globaltv.lat` | WAN | Production public backend. |
+
+See [Server manager](/reference/utils/server-manager) for how the probe sequence is built and how profiles are persisted.
+
+## API paths
+
+These paths are appended to the active server's base URL to form full endpoint URLs.
+
+| Constant | Value | Description |
+|---|---|---|
+| `PATH_HEALTH` | `/health` | Health check endpoint. Polled to confirm a server is reachable before auth. |
+| `PATH_HANDSHAKE` | `/api/v1/app/devices/handshake` | Device registration handshake on the primary server. |
+| `PATH_ADS` | `/api/v1/app/ads/active` | Fetch currently active ads for the channel. |
+| `PATH_METRICS` | `/api/v1/app/metrics/track` | Send playback and usage metrics events. |
+| `PATH_AUTH_TPL` | `/auth/{user}/{pass}` | Auth URL template. `{user}` and `{pass}` are replaced at runtime with encoded credentials. |
+| `PATH_PLAYLIST_TPL` | `/auth/{user}/{pass}/playlist/m3u8/hls` | Playlist URL template. Returns an M3U8 HLS playlist after authentication. |
+
+## Ads API
+
+The ads system optionally uses a dedicated ads server (`ADS_API_BASE_URL`) separate from the main backend.
+
+| Constant | Value | Description |
+|---|---|---|
+| `ADS_API_BASE_URL` | `https://ads.globaltv.lat/api/v1` | Base URL for the dedicated ads API. |
+| `ADS_PATH_HANDSHAKE` | `/app/devices/handshake` | Ads server handshake path. |
+| `ADS_PATH_ACTIVE` | `/app/ads/active` | Fetch active ads from the ads server. |
+| `ADS_PATH_IMPRESSIONS` | `/app/impressions/events/batch` | Submit batched impression events. |
+| `ADS_USE_DEDICATED` | `true` | When `true`, the ads system uses `ADS_API_BASE_URL` instead of the main server. |
+| `ADS_HANDSHAKE_ENABLED` | `true` | When `true`, the ads handshake runs before fetching active ads. |
+
+<Tip>
+To route ads traffic through the main backend instead of the dedicated ads server, set `ADS_USE_DEDICATED` to `false`. The system will fall back to `PATH_ADS` on the active primary server.
+</Tip>
+
+## Timeouts and retries
+
+| Constant | Value | Description |
+|---|---|---|
+| `TIMEOUT_HEALTH` | `2500` ms | Maximum wait time for a health check response. Kept short so server probing is fast. |
+| `TIMEOUT_AUTH` | `15000` ms | Maximum wait time for an auth request. Longer to allow for slow backends. |
+| `TIMEOUT_HTTP` | `12000` ms | Default HTTP timeout for all other requests. |
+| `RETRY_MAX` | `3` | Maximum number of retry attempts for failed requests. |
+| `SERVER_LAN_FORCE_RETRIES` | `3` | Number of times each LAN server is tried before falling back to WAN servers. Compensates for transient LAN latency. |
+
+## Registry keys
+
+These constants define the key names used when reading and writing to the Roku registry. See [Registry](/configuration/registry) for full usage.
+
+| Constant | Key name | Stored value |
+|---|---|---|
+| `REG_SECTION` | `GlobalTV` | The registry section all keys are written under. |
+| `REG_KEY_USER` | `username` | Authenticated username. |
+| `REG_KEY_PASS` | `password` | Authenticated password. |
+| `REG_KEY_SERVER` | `lastServer` | Base URL of the last successfully connected server. |
+| `REG_KEY_CHANNEL` | `lastChannelIndex` | Index of the last viewed channel in the grid. |
+| `REG_KEY_SAFE_MARGIN` | `uiSafeMarginPct` | User-configured safe-area margin as a percentage. |
+| `REG_KEY_SERVER_PROFILES` | `serverProfiles` | JSON-serialized array of server profile objects. |
+
+## Polling intervals
+
+| Constant | Value | Description |
+|---|---|---|
+| `ADS_POLL_MS` | `10000` ms | How often the ads task polls for new active ads. |
+| `NET_RETRY_MS` | `30000` ms | How often the connectivity task retries after detecting the network is down. |
+| `FREEZE_CHECK_MS` | `10000` ms | Interval for the player freeze-detection watchdog. |
+| `SESSION_AUTH_CHECK_MS` | `420000` ms (7 min) | How often a background session auth check runs to detect expired credentials. |
+
+## App identity
+
+| Constant | Value | Description |
+|---|---|---|
+| `APP_IDENTITY` | `GlobalTV_Roku` | Stable identifier sent in handshake and metrics requests to identify this client. |
+| `APP_VERSION` | `1.0.6` | Current app version string. Keep in sync with `major_version.minor_version.build_version` in the [manifest](/configuration/manifest). |
+
+## Auth reason codes
+
+`GTV_AuthClassifyFailure()` maps HTTP responses and body signals to one of these reason codes. UI components use the code to show the correct error message.
+
+| Constant | Code | Meaning |
+|---|---|---|
+| `AUTH_REASON_NONE` | `0` | No auth failure — request succeeded or failure is unclassified. |
+| `AUTH_REASON_NETWORK_DOWN` | `460` | HTTP returned `-1` — the network is unreachable. |
+| `AUTH_REASON_CREDENTIALS` | `401` | Wrong username or password. |
+| `AUTH_REASON_INACTIVE` | `470` | Account exists but subscription is inactive. |
+| `AUTH_REASON_PASSWORD_CHANGED` | `471` | Credentials were valid but the password has been changed or the session was revoked. |
+
+## Colors
+
+All color values use Roku's `0xRRGGBBAA` hex format as strings.
+
+| Constant | Value | Use |
+|---|---|---|
+| `COLOR_PRIMARY` | `0x2D57C1FF` | Primary brand blue — buttons, highlights, focus indicators. |
+| `COLOR_BG` | `0x0F1020FF` | App background — deep navy, used for screen backgrounds. |
+| `COLOR_BG_CARD` | `0x1A1A2EFF` | Card and panel background — slightly lighter than `COLOR_BG`. Also used as `splash_color` in the manifest. |
+| `COLOR_TEXT` | `0xFFFFFFFF` | Primary text — white. |
+| `COLOR_TEXT_DIM` | `0x9E9E9EFF` | Secondary text — medium grey for labels and metadata. |
+| `COLOR_ERROR` | `0xE53935FF` | Error state — red. |
+| `COLOR_SUCCESS` | `0x43A047FF` | Success state — green. |
+| `COLOR_WARNING` | `0xFB8C00FF` | Warning state — amber. |
+| `COLOR_OVERLAY` | `0x000000CC` | Semi-transparent black overlay for modal dialogs and banners. |
+
+## Font sizes
+
+Font sizes are integer pixel values for use with Roku's `roFontRegistry` at 1080p design resolution. `GTV_GetLayoutContext()` scales them proportionally for other resolutions.
+
+| Constant | Value | Use |
+|---|---|---|
+| `FONT_H1` | `48` | Primary headings — screen titles. |
+| `FONT_H2` | `36` | Secondary headings — section labels. |
+| `FONT_BODY` | `24` | Body text — descriptions, menu items. |
+| `FONT_SMALL` | `18` | Small labels — metadata, timestamps. |
+| `FONT_NUMBER` | `72` | Large channel number display in the number overlay. |
+
+## Timing
+
+| Constant | Value | Description |
+|---|---|---|
+| `SPLASH_MS` | `1500` ms | How long `SplashScreen` is held before the app proceeds. Matches `splash_min_time` in the [manifest](/configuration/manifest). |
+| `BANNER_MS` | `3000` ms | How long the channel banner remains visible after it is shown. |
+| `BANNER_FADE_MS` | `300` ms | Duration of the banner fade-out animation. |
+| `CHANNEL_BUF_MS` | `1200` ms | Buffer wait time after a channel change before the player starts. Prevents rapid-fire stream requests when navigating. |
+
+## Flags
+
+| Constant | Value | Description |
+|---|---|---|
+| `PARSER_STRICT_CHANNEL_NUMBER` | `true` | When `true`, the M3U parser rejects channels that do not have a valid integer channel number. |
+| `CHANNEL_TILE_MODE` | `"badge_only"` | Controls what is rendered on channel tiles in the grid. `"badge_only"` shows only the channel number badge without a logo. |
+| `LAYOUT_DIAG` | `false` | Enables layout diagnostics — prints design resolution resolution and scale factor to the debug log. |
+| `MAINSCREEN_GRID_DIAG` | `false` | Enables grid layout diagnostics on the main channel grid screen. |
+| `ADS_FLOW_DIAG` | `false` | Enables verbose logging of the ads state machine transitions. |
+
+<Warning>
+Leave all `_DIAG` flags set to `false` before packaging for submission. These flags generate significant log output and are intended only for local debugging.
+</Warning>
+
+## Safe margin
+
+The safe-area margin offsets the UI inward from all edges to avoid overscan on TVs that clip the image.
+
+| Constant | Value | Description |
+|---|---|---|
+| `UI_SAFE_MARGIN_PCT` | `0` | Default safe-area margin as a percentage of screen dimensions. `0` means no inset. |
+| `UI_SAFE_MARGIN_MIN_PCT` | `0` | Minimum allowed value when the user adjusts the margin in Settings. |
+| `UI_SAFE_MARGIN_MAX_PCT` | `10` | Maximum allowed value — 10% inset on each edge. |
+
+The user can override `UI_SAFE_MARGIN_PCT` at runtime from the Settings screen; the override is stored in the registry under `REG_KEY_SAFE_MARGIN`.
+
+## Helper functions
+
+### GTV_GetSafeArea()
+
+Returns the usable screen rectangle after applying the safe-area margin.
+
+```brightscript
+function GTV_GetSafeArea(node as Object) as Object
+    size = GTV_GetDesignSize(node)
+    pct  = GTV_GetSafeMarginPct()
+
+    x = Int(size.w * pct / 100.0)
+    y = Int(size.h * pct / 100.0)
+    w = size.w - (x * 2)
+    h = size.h - (y * 2)
+
+    return {
+        screenW: size.w,
+        screenH: size.h,
+        x: x, y: y, w: w, h: h,
+        pct: pct
+    }
+end function
+```
+
+| Return field | Description |
+|---|---|
+| `screenW`, `screenH` | Full screen dimensions before inset. |
+| `x`, `y` | Top-left origin of the safe area. |
+| `w`, `h` | Width and height of the safe area. |
+| `pct` | The margin percentage that was applied. |
+
+### GTV_GetLayoutContext()
+
+Builds a layout context used by all screens to position and size elements consistently. Derives a uniform scale factor so UI designed at 1920×1080 scales correctly on HD and SD displays.
+
+```brightscript
+function GTV_GetLayoutContext(node as Object) as Object
+    safe  = GTV_GetSafeArea(node)
+    scale = Min(safe.w / 1920.0, safe.h / 1080.0)
+    ' ... returns safeX, safeY, safeW, safeH, sx, sy
+end function
+```
+
+| Return field | Description |
+|---|---|
+| `safeX`, `safeY` | Origin of the layout area within the safe region. |
+| `safeW`, `safeH` | Dimensions of the layout area. |
+| `sx`, `sy` | Uniform scale factor (always equal — the smaller of the two axes). |
+| `rawSx`, `rawSy` | Unclipped per-axis scale factors before uniformity is applied. |
+
+Use `GTV_LX()`, `GTV_LY()`, `GTV_LW()`, `GTV_LH()` to convert 1080p design coordinates to screen coordinates using the context.
+
+### GTV_GetDesignSize()
+
+Resolves the active design resolution for a node, reading from `currentDesignResolution`, the scene's bounding rect, or the display mode — whichever is available first.
+
+```brightscript
+function GTV_GetDesignSize(node as Object) as Object
+    ' Returns { w: Integer, h: Integer }
+    ' Resolution determined from:
+    '   1. node.currentDesignResolution
+    '   2. scene.currentDesignResolution
+    '   3. node/scene boundingRect
+    '   4. roDeviceInfo.GetDisplayMode()
+end function
+```
+
+### GTV_AuthClassifyFailure()
+
+Maps an HTTP response to one of the `AUTH_REASON_*` constants by inspecting the status code, response body, and server-provided reason strings. Supports both English and Spanish error messages.
+
+```brightscript
+function GTV_AuthClassifyFailure(
+    httpCode       as Integer,
+    reasonText     = invalid as Dynamic,
+    bodyText       = invalid as Dynamic,
+    subscriberActive = invalid as Dynamic
+) as Integer
+```
+
+| Parameter | Description |
+|---|---|
+| `httpCode` | The HTTP status code. `-1` indicates a network failure. |
+| `reasonText` | The HTTP reason phrase string from the response. |
+| `bodyText` | The raw response body — may be a string or a parsed associative array. |
+| `subscriberActive` | Optional Boolean from the server payload. If `false`, returns `AUTH_REASON_INACTIVE`. |
+
+The function normalizes text (lowercases and strips accents) before pattern matching, so it handles accented Spanish characters in server responses correctly.

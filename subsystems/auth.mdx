@@ -1,0 +1,189 @@
+---
+title: Authentication
+description: How GlobalTV Roku authenticates users, auto-logs in from saved credentials, and re-validates sessions on a recurring timer.
+---
+
+The authentication subsystem handles the full credential lifecycle: initial login, auto-login on startup, periodic session re-validation, and error classification.
+
+## Auth flow
+
+<Steps>
+  <Step title="Credentials entered">
+    The user enters a username and password on `LoginScreen`. The credentials are trimmed and validated before the task is started.
+  </Step>
+  <Step title="Server resolved">
+    `GTV_ResolveServerForAuth()` probes the server list in order — LAN servers first, then the public WAN server — and returns the first server that responds to a health ping.
+  </Step>
+  <Step title="HTTP request sent">
+    `AuthTask` makes a GET request to the auth endpoint with URL-encoded credentials:
+
+    ```brightscript
+    authUrl = server + "/auth/" + encUser + "/" + encPass
+    resp = GTV_HttpGet(authUrl, c.TIMEOUT_AUTH)
+    ```
+
+    The timeout is `TIMEOUT_AUTH = 15000ms`.
+  </Step>
+  <Step title="Response parsed">
+    On a successful HTTP response the body is cleaned with `GTV_CleanJson()` and parsed. The task checks `subscriberStatus`, `subscriber_active`, and `active` fields to confirm the account is active.
+  </Step>
+  <Step title="Global state updated">
+    On success, `m.global.isAuthenticated`, `m.global.subscriberActive`, and `m.global.userId` are set, the server is persisted to the registry, and the playlist task is started.
+  </Step>
+</Steps>
+
+## Endpoint
+
+```text
+GET {server}/auth/{user}/{pass}
+```
+
+Defined in `AppConstants.brs` as:
+
+```brightscript
+PATH_AUTH_TPL: "/auth/{user}/{pass}"
+TIMEOUT_AUTH : 15000
+```
+
+## Auto-login
+
+After the splash screen, `MainScene` checks the Roku registry for saved credentials:
+
+```brightscript
+sub OnSplashDone()
+    creds = GTV_RegLoadCredentials()
+    if creds <> invalid
+        GTV_Log("MainScene", "Credentials found - starting auto-login")
+        RunAutoLogin(creds.username, creds.password)
+    else
+        GTV_Log("MainScene", "No credentials - showing onboarding")
+        ShowOnboarding()
+    end if
+end sub
+```
+
+Credentials are stored in the `"GlobalTV"` registry section under keys `"username"` and `"password"`:
+
+```brightscript
+REG_SECTION   : "GlobalTV"
+REG_KEY_USER  : "username"
+REG_KEY_PASS  : "password"
+```
+
+## Session re-authentication
+
+After a successful auth, `MainScene` starts a repeating timer that re-authenticates in the background every **7 minutes** (420,000 ms):
+
+```brightscript
+SESSION_AUTH_CHECK_MS : 420000
+```
+
+```brightscript
+sub StartSessionAuthChecks()
+    if m.sessionAuthTimer = invalid then return
+    m.sessionAuthTimer.control = "stop"
+    m.sessionAuthTimer.control = "start"
+    GTV_Log("MainScene", "Session auth timer started interval_s=" + m.sessionAuthTimer.duration.ToStr())
+end sub
+```
+
+If the re-auth fails, the error is classified and the app either shows a session issue dialog or silently defers (on network errors).
+
+<Note>
+Session checks are skipped when the device is offline (`m.global.hasInternet = false`) or when another auth, playlist, or handshake task is already in flight.
+</Note>
+
+## Error classification
+
+`GTV_AuthClassifyFailure()` maps HTTP codes and response body signals to a typed reason code:
+
+```brightscript
+function GTV_AuthClassifyFailure(httpCode as Integer, reasonText = invalid as Dynamic, bodyText = invalid as Dynamic, subscriberActive = invalid as Dynamic) as Integer
+    c = AppConstants()
+
+    if httpCode = -1
+        return c.AUTH_REASON_NETWORK_DOWN
+    end if
+
+    signal = GTV_AuthToText(reasonText)
+    signal = GTV_AuthConcatSignal(signal, GTV_AuthToText(bodyText))
+    signal = GTV_AuthConcatSignal(signal, GTV_AuthExtractSignalFromBody(bodyText))
+    signal = GTV_AuthNormalizeSignal(signal)
+
+    if GTV_AuthLooksInactive(signal, subscriberActive)
+        return c.AUTH_REASON_INACTIVE
+    end if
+
+    if GTV_AuthLooksCredentialFailure(signal)
+        return c.AUTH_REASON_CREDENTIALS
+    end if
+
+    if GTV_AuthLooksPasswordChanged(signal)
+        return c.AUTH_REASON_PASSWORD_CHANGED
+    end if
+    ...
+end function
+```
+
+The function normalizes the combined signal string (lowercased, accents stripped) and checks for keyword patterns in both the HTTP status code and the response body.
+
+### Reason codes
+
+| Constant | Value | Meaning |
+|---|---|---|
+| `AUTH_REASON_NONE` | `0` | Authentication succeeded |
+| `AUTH_REASON_NETWORK_DOWN` | `460` | HTTP code `-1` — server unreachable or timed out |
+| `AUTH_REASON_CREDENTIALS` | `401` | Wrong username or password (HTTP 401/403/404 or credential keywords in body) |
+| `AUTH_REASON_INACTIVE` | `470` | Account is inactive (`subscriberStatus=false` or inactive keywords) |
+| `AUTH_REASON_PASSWORD_CHANGED` | `471` | Password was changed since the session started |
+
+### Classification logic
+
+<AccordionGroup>
+  <Accordion title="AUTH_REASON_NETWORK_DOWN (460)">
+    Returned when `httpCode = -1`, which means the HTTP client timed out or could not reach the server. The timeout is `TIMEOUT_AUTH = 15000ms`.
+  </Accordion>
+  <Accordion title="AUTH_REASON_INACTIVE (470)">
+    Triggered when `subscriberActive = false` is passed explicitly, or when the normalized signal string contains any of: `user_inactive`, `subscriberstatus`, `subscriberdisabledreason`, `inactivo`, `inactive`, `cuenta inactiva`, `subscriber inactive`.
+  </Accordion>
+  <Accordion title="AUTH_REASON_CREDENTIALS (401)">
+    Triggered by HTTP 401, 403, or 404, or when the body contains credential failure keywords such as `credenciales incorrectas`, `invalid credentials`, `wrong credentials`, `username or password`, etc.
+  </Accordion>
+  <Accordion title="AUTH_REASON_PASSWORD_CHANGED (471)">
+    Triggered when the body contains an explicit phrase like `password changed`, `contrasena cambio`, or a combination of password + change/reset keywords, or revoked session signals like `token revoked`, `session expired`, `unauthenticated`.
+  </Accordion>
+</AccordionGroup>
+
+## AuthTask interface
+
+Defined in `AuthTask.xml`:
+
+| Field | Type | Direction | Description |
+|---|---|---|---|
+| `username` | `string` | input | The username to authenticate |
+| `password` | `string` | input | The password to authenticate |
+| `result` | `assocarray` | output | Auth result object (see below) |
+| `done` | `boolean` | output | Set to `true` when the task completes |
+| `statusMessage` | `string` | output | Human-readable status for UI display |
+| `statusTick` | `integer` | output | Increments on each status update |
+
+### Result object fields
+
+```brightscript
+result = {
+    success                  : false,
+    userId                   : "",
+    streamUrl                : "",
+    subscriberActive         : false,
+    subscriberDisabledReason : "",
+    errorCode                : -1,
+    authReason               : c.AUTH_REASON_NONE,
+    errorMsg                 : "",
+    rawBody                  : "",
+    resolvedServer           : ""
+}
+```
+
+<Warning>
+The `AuthTask` sets `m.global.isAuthenticated = true` directly on success. Code that depends on authentication state should observe `m.global.isAuthenticated` rather than polling `AuthTask.done`.
+</Warning>

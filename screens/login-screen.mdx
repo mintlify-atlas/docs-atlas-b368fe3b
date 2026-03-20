@@ -1,0 +1,159 @@
+---
+title: Login Screen
+description: On-device login screen that collects user credentials, optionally retrieves the Roku account email via getUserData, and authenticates against the backend.
+---
+
+The `LoginScreen` handles the full Roku on-device login flow. It meets Roku certification requirements by using a `StandardKeyboardDialog` for text entry and by requesting the user's Roku account email through the `ChannelStore` `getUserData` command before submitting credentials.
+
+## Layout
+
+The screen uses a two-panel layout:
+
+- **Left panel** — branding area with the GlobalTV logo and tagline
+- **Right panel** — login form with username field, password field, show/hide toggle, and submit button
+
+Background images are resolution-aware:
+
+```brightscript
+' components/LoginScreen/LoginScreen.brs
+function GTV_SelectLoginBackgroundUri(screenW as Integer) as String
+    if screenW >= 1600
+        return "pkg:/images/login_bg_fhd.png"
+    end if
+    return "pkg:/images/login-bg-hd.png"
+end function
+```
+
+## Focus model
+
+Four focusable items are tracked by index:
+
+```brightscript
+m.LF_USERNAME     = 0
+m.LF_PASSWORD     = 1
+m.LF_SHOW_PASSWORD = 2
+m.LF_BUTTON       = 3
+```
+
+Navigation between them uses **Up/Down** for username↔password↔lower row, and **Left/Right** to toggle between the show-password checkbox and the submit button in the lower row.
+
+## Keyboard entry
+
+Tapping OK on a field opens a `StandardKeyboardDialog`. Password fields enable `secureMode`:
+
+```brightscript
+sub OpenKeyboard(title as String, prefill as String, isPassword as Boolean)
+    kb = m.top.GetScene().CreateChild("StandardKeyboardDialog")
+    kb.title = title
+    kb.text = prefill
+    if isPassword
+        kb.buttons = ["Ingresar"]
+        if kb.HasField("keyboardDomain")
+            kb.keyboardDomain = "password"
+        end if
+        ' ... secureMode enabled on textEditBox
+    else
+        kb.buttons = ["Confirmar"]
+    end if
+    kb.observeField("buttonSelected", "OnKeyboardConfirm")
+    kb.observeField("wasClosed", "OnKeyboardBack")
+end sub
+```
+
+## Roku email request (getUserData)
+
+Before submitting credentials, the screen requests the user's Roku account email using the `ChannelStore` `getUserData` command. This is part of the Roku on-device login certification requirement.
+
+```brightscript
+sub RequestRokuEmail()
+    SetStatusHint("Solicitando correo de Roku...")
+
+    store = CreateObject("roSGNode", "ChannelStore")
+    info = CreateObject("roSGNode", "ContentNode")
+    info.addFields({ context: "signin" })
+
+    if store.HasField("requestedUserDataInfo")
+        store.requestedUserDataInfo = info
+    end if
+    if store.HasField("requestedUserData")
+        store.requestedUserData = "email"
+    end if
+
+    store.observeField("userData", "OnRokuUserData")
+    m.userDataStore = store
+    m.isRequestingRokuEmail = true
+    store.command = "getUserData"
+end sub
+```
+
+If the email is retrieved, it is stored in `m.global.rokuEmail` and passed along with the credentials in the login result. If the request fails or returns empty, login continues without an email — this is a graceful fallback, not a hard error.
+
+## Authentication flow
+
+<Steps>
+  <Step title="User presses the Login button">
+    `TryLogin()` is called. It first checks network connectivity via `GTV_IsOnline()`.
+  </Step>
+  <Step title="Roku email is requested">
+    If `m.rfiResolved` is not yet `true`, `RequestRokuEmail()` is called. Input is blocked until the response arrives.
+  </Step>
+  <Step title="Credentials are validated locally">
+    Username and password are trimmed with `GTV_SafeTrimLogin()`. Empty values display an inline error and re-open the relevant keyboard.
+  </Step>
+  <Step title="AuthTask is started">
+    An `AuthTask` node is created and given the username and password. Status messages from `statusTick` are shown in the status hint bar at the bottom.
+  </Step>
+  <Step title="Result is handled">
+    On success, `loginResult` and `loginSucceeded = true` are set. On failure, `HandleAuthFailure()` displays the error and may reset the password field for retry.
+  </Step>
+</Steps>
+
+### Auth guard timeout
+
+A watchdog timer prevents the login from hanging indefinitely. Its duration is calculated from `AppConstants` timeouts:
+
+```brightscript
+function GTV_LoginGuardDurationSeconds() as Integer
+    c = AppConstants()
+    totalMs = (c.TIMEOUT_HEALTH * (c.SERVER_LAN_FORCE_RETRIES + 1)) + c.TIMEOUT_AUTH + 5000
+    if totalMs < 20000 then totalMs = 20000
+    return Int((totalMs + 999) / 1000)
+end function
+```
+
+If the timer fires while `m.isSubmitting = true`, the attempt is cancelled with the message "El servidor tardo demasiado en responder."
+
+## Auto-login path
+
+When `MainScene` detects saved credentials in the registry at startup, it bypasses `LoginScreen` entirely and runs `AuthTask` directly. `LoginScreen` is only shown if:
+
+- There are no saved credentials (first run)
+- Auto-login fails and `MainScene` redirects back to login
+- The user explicitly logs out from `SettingsScreen`
+
+## Error handling
+
+<AccordionGroup>
+  <Accordion title="AUTH_REASON_CREDENTIALS (401)">
+    Password field is cleared and focus moves to the password input. A retry is expected.
+  </Accordion>
+  <Accordion title="AUTH_REASON_PASSWORD_CHANGED (471)">
+    Same as credentials failure — password cleared and refocused.
+  </Accordion>
+  <Accordion title="AUTH_REASON_INACTIVE (470)">
+    User account is inactive. Error is displayed at the button row. Password is cleared.
+  </Accordion>
+  <Accordion title="No network">
+    `GTV_IsOnline()` returns `false`. Error shown immediately without starting `AuthTask`.
+  </Accordion>
+</AccordionGroup>
+
+## Interface fields
+
+```xml
+<!-- components/LoginScreen/LoginScreen.xml -->
+<field id="loginSucceeded" type="boolean" value="false" />
+<field id="loginResult"    type="assocarray" />
+```
+
+`loginResult` contains `{ username, password, rokuEmail }` and is read by `MainScene` to start the playlist load.

@@ -1,0 +1,78 @@
+---
+title: Onboarding Screen
+description: Welcome screen shown on first launch or when no saved credentials are found, directing users to sign in.
+---
+
+The `OnboardingScreen` is shown when GlobalTV has no saved credentials in the registry. It introduces the app to new users and provides a clear path to the login flow.
+
+## When it appears
+
+After the splash screen completes, `MainScene` checks the Roku registry for saved credentials using `RegistryManager`. If no valid `username`/`password` pair is found, `OnboardingScreen` is displayed instead of proceeding directly to auto-login.
+
+<Note>
+If credentials are found in the registry, the app skips this screen entirely and attempts auto-login directly.
+</Note>
+
+## Layout and elements
+
+The screen has a dark background (`0x0F1020FF`) and centers its content in the safe area. All positions are calculated at runtime by `ApplyResponsiveLayout()` using the layout context from `GTV_GetLayoutContext()`.
+
+| Element | Node ID | Description |
+|---|---|---|
+| Brand logo | `logo` | GlobalTV logo, centered horizontally |
+| Title | `lblTitle` | "Bienvenido a GlobalTV IPTV" |
+| Subtitle | `lblSubtitle` | "Necesitas una cuenta activa para acceder" |
+| Login button | `btnLoginBg` + `btnLoginLabel` | Primary action, blue (`0x2D57C1FF`) when focused |
+| Info button | `btnInfoBg` + `btnInfoLabel` | Secondary action, reveals support URL |
+| Support URL | `lblSupportUrl` | Hidden by default, toggled by the info button |
+
+## Navigation
+
+The screen handles two buttons navigated with **Up/Down**. Focus state is tracked with `m.focusIndex`:
+
+```brightscript
+' components/OnboardingScreen/OnboardingScreen.brs
+m.OB_BTN_LOGIN = 0
+m.OB_BTN_INFO  = 1
+m.focusIndex = m.OB_BTN_LOGIN
+```
+
+Focused and unfocused colors are applied via `UpdateFocus()`:
+
+```brightscript
+if m.focusIndex = m.OB_BTN_LOGIN
+    loginBg.color  = "0x2D57C1FF"
+    infoBg.color   = "0x1A2A4AFF"
+    loginLbl.color = "0xFFFFFFFF"
+    infoLbl.color  = "0x9E9E9EFF"
+else
+    loginBg.color  = "0x1A2A4AFF"
+    infoBg.color   = "0x2D57C1FF"
+    loginLbl.color = "0x9E9E9EFF"
+    infoLbl.color  = "0xFFFFFFFF"
+end if
+```
+
+## Key actions
+
+<Steps>
+  <Step title="User presses OK on Login button">
+    Sets `m.top.goToLogin = true`. `MainScene` observes this field and transitions to `LoginScreen`.
+  </Step>
+  <Step title="User presses OK on Info button">
+    Calls `ToggleInfoUrl()`, which toggles the `lblSupportUrl` label between visible and hidden. The support contact shown is `https://globalfiber.com.pe/contactanos`.
+  </Step>
+  <Step title="User presses Back">
+    Increments `m.top.requestExit`. `MainScene` observes this and handles the exit request.
+  </Step>
+</Steps>
+
+## Interface fields
+
+```xml
+<!-- components/OnboardingScreen/OnboardingScreen.xml -->
+<field id="goToLogin"    type="boolean" value="false" />
+<field id="requestExit"  type="integer" value="0" />
+```
+
+`goToLogin` is a boolean trigger — `MainScene` observes it and opens `LoginScreen` when it becomes `true`. `requestExit` is an integer counter so it can be observed on repeated Back presses.

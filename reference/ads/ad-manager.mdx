@@ -1,0 +1,130 @@
+---
+title: AdManager
+description: Orchestrates ad display, format selection, and impression tracking for the GlobalTV Roku app.
+---
+
+`AdManager` is a SceneGraph `Group` component that receives ad data from `AdsPollingTask`, instantiates the correct format node (`AdFormatA`, `AdFormatB`, or `AdFormatC`), tracks impression sessions, and computes video viewport adjustments required by Format C ads.
+
+## Interface fields
+
+### Inputs
+
+<ParamField body="adPayload" type="assocarray">
+  A single ad record delivered as an associative array. `AdManager` wraps it in a synthetic snapshot and calls `ApplySnapshot` internally. Triggers `onAdPayload`.
+</ParamField>
+
+<ParamField body="adsSnapshot" type="assocarray">
+  A full snapshot containing an `ads` array plus optional `server_time`, `adViewportX/Y/W/H`, and `adBaseViewportX/Y/W/H` keys. Triggers `onAdsSnapshot`.
+</ParamField>
+
+<ParamField body="clearAds" type="boolean" default="false">
+  Set to `true` to destroy all active ad slots immediately. Resets to `false` after processing.
+</ParamField>
+
+<ParamField body="videoViewport" type="assocarray">
+  Current video playback viewport `{x, y, w, h}`. Used by Format A and B nodes to position ads relative to the live video area. Triggers `onVideoViewportChanged`.
+</ParamField>
+
+<ParamField body="videoBaseViewport" type="assocarray">
+  Full-screen base viewport `{x, y, w, h}`. Used by Format C to calculate height reduction. Triggers `onVideoBaseViewportChanged`.
+</ParamField>
+
+### Outputs
+
+<ParamField body="trackMetric" type="assocarray">
+  Written each time an impression session closes. Contains `event_type`, `event_uuid`, `stream_id`, `ad_id`, `ad_format`, `visible_ms`, `reason`, and `slot`.
+</ParamField>
+
+<ParamField body="allAdsHidden" type="boolean" default="false">
+  Set to `true` when three consecutive image-load failures occur (`maxFails = 3`). The parent screen can observe this to suppress further ad polling.
+</ParamField>
+
+<ParamField body="videoHeightReduction" type="integer" default="0">
+  Total pixel height consumed by active Format C ads. The parent video node should reduce its render height by this amount.
+</ParamField>
+
+<ParamField body="videoOffsetY" type="integer" default="0">
+  Vertical offset in pixels caused by a top-positioned Format C ad. The parent video node should shift its Y origin by this amount.
+</ParamField>
+
+## How AdManager receives ad data
+
+`AdsPollingTask` writes to either `adPayload` (single ad) or `adsSnapshot` (full batch). `AdManager` normalises every record through `NormalizeAdRecord`, which resolves the ad type, media URL, position, slot key, and optional `active_until` expiry timestamp.
+
+Ads that are already expired relative to local time (accounting for clock skew derived from `snapshot.server_time`) are silently dropped during normalisation.
+
+```brightscript
+' Snapshot delivered by AdsPollingTask
+adsManager.adsSnapshot = {
+    server_time: "2026-03-20T14:00:00Z"
+    ads: [
+        {
+            ad_id: "ad-001"
+            format: { type: "a", position: "bottom", height_percent: 15 }
+            media_url: "https://cdn.example.com/banner.png"
+            active_until: "2026-03-20T14:05:00Z"
+        }
+    ]
+}
+```
+
+## Format selection logic
+
+`AdManager` reads the normalised `adType` field (`"a"`, `"b"`, or `"c"`) and instantiates the matching component:
+
+| `adType` | Component | Slot key pattern |
+|---|---|---|
+| `"a"` | `AdFormatA` | `a:top` or `a:bottom` |
+| `"b"` | `AdFormatB` | `b:top-left`, `b:top-right`, `b:bottom-left`, `b:bottom-right` |
+| `"c"` | `AdFormatC` | `c:top` or `c:bottom` |
+
+Only one Format A ad can be active at a time (top or bottom, not both). Format B supports up to four simultaneous corner slots. Format C supports one top and one bottom slot simultaneously.
+
+The render order is enforced by `ApplyRenderOrder`, which appends nodes in the sequence `c:top → c:bottom → a:top → a:bottom → b:top-left → b:top-right → b:bottom-left → b:bottom-right`.
+
+```brightscript
+function CreateAdNode(rec as Object) as Object
+    if adType = "a"
+        node = CreateObject("roSGNode", "AdFormatA")
+    else if adType = "b"
+        node = CreateObject("roSGNode", "AdFormatB")
+    else if adType = "c"
+        node = CreateObject("roSGNode", "AdFormatC")
+    end if
+    ...
+end function
+```
+
+## Impression tracking
+
+An impression session starts the moment an ad node reports `imageLoaded = true`. `AdManager` records a start timestamp using `roTimespan` and generates a UUID via `GTV_NewImpressionUuid`.
+
+When a slot is destroyed (expiry, replacement, clear, or image error), `CloseImpressionForSlot` computes the visible duration. Sessions shorter than 1000 ms are discarded. Valid sessions are written to `trackMetric`.
+
+The consuming component is responsible for POSTing `trackMetric` events to the ads API at `ADS_PATH_IMPRESSIONS` (`/app/impressions/events/batch`).
+
+```brightscript
+' Impression close event written to trackMetric
+{
+    event_type : "ad_impression_closed"
+    event_uuid : "67a1b2c3-0001-4d4e-8f5a-000000000001"
+    stream_id  : "stream-42"
+    ad_id      : "ad-001"
+    ad_format  : "a"
+    visible_ms : 4823
+    reason     : "expired"
+    slot       : "a:bottom"
+}
+```
+
+## Expiry sweep
+
+A 1-second repeating `Timer` (`expirySweepTimer`) runs continuously. On each tick, every active slot is checked against the current local time plus any clock skew. Expired slots are destroyed and `videoHeightReduction`/`videoOffsetY` are recomputed.
+
+## Video reduction calculation
+
+For Format C ads, `RecomputeVideoReductionAndEmit` sums the pixel heights of active `c:top` and `c:bottom` slots. The total is clamped so the remaining video height never falls below 480 px. Top reduction is also emitted as `videoOffsetY` so the video frame shifts down when a top Format C ad is present.
+
+<Note>
+The `ADS_FLOW_DIAG` flag in `AppConstants` enables verbose diagnostic logging for the entire ad lifecycle. Set `ADS_FLOW_DIAG: true` during development to trace slot creation, reconciliation, and expiry.
+</Note>

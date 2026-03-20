@@ -1,0 +1,227 @@
+---
+title: Application flow
+description: Step-by-step walkthrough of the GlobalTV Roku startup sequence, screen navigation, and deep-link handling.
+---
+
+This page traces the full lifecycle of the application from the moment Roku launches the channel through to live video playback, covering both the cold-start (launch) and warm-start (input deep-link) paths.
+
+## Startup and navigation flow
+
+<Steps>
+  <Step title="main.brs — channel entry point">
+    Roku calls `Main(args)` in `source/main.brs`. The function creates the screen stack objects, instantiates `MainScene`, and enters the main event loop.
+
+    ```brightscript
+    sub Main(args as Dynamic)
+        screen = CreateObject("roSGScreen")
+        port   = CreateObject("roMessagePort")
+        screen.SetMessagePort(port)
+
+        input = CreateObject("roInput")
+        input.SetMessagePort(port)
+
+        scene = screen.CreateScene("MainScene")
+        scene.ObserveField("exitRequested", port)
+        screen.Show()
+        ' ... event loop
+    end sub
+    ```
+
+    If `args` contains a valid `mediaType=live` deep link, it is forwarded to `scene.launchDeepLink` before the event loop starts.
+  </Step>
+
+  <Step title="MainScene.init() — global state and splash">
+    `MainScene.init()` runs on the render thread immediately after the scene is created:
+
+    1. Calls `GTV_InitGlobalState()` to populate all `m.global` fields.
+    2. Sets up layout timers, focus-repair timer, and the periodic session-auth timer.
+    3. Calls `ShowSplash()` to create and display `SplashScreen`.
+
+    ```brightscript
+    sub init()
+        GTV_InitGlobalState()
+        ApplySceneLayout()
+        ' ... timers ...
+        ShowSplash()
+    end sub
+    ```
+  </Step>
+
+  <Step title="SplashScreen — branding display">
+    `SplashScreen` plays the splash animation for `SPLASH_MS` (1 500 ms by default) then fires the `splashDone` field.
+
+    `MainScene` observes `splashDone` and calls `OnSplashDone()`.
+  </Step>
+
+  <Step title="Credential check — auto-login or onboarding">
+    `OnSplashDone()` calls `GTV_RegLoadCredentials()` to read saved credentials from the Roku registry.
+
+    ```brightscript
+    sub OnSplashDone()
+        creds = GTV_RegLoadCredentials()
+        if creds <> invalid
+            RunAutoLogin(creds.username, creds.password)
+        else
+            ShowOnboarding()
+        end if
+    end sub
+    ```
+
+    - **Credentials found** → `RunAutoLogin()` (step 5)
+    - **No credentials** → `ShowOnboarding()` (step 6)
+  </Step>
+
+  <Step title="Auto-login path — AuthTask">
+    `RunAutoLogin()` creates an `AuthTask` node, passes the saved credentials, and waits for `done`.
+
+    ```brightscript
+    sub RunAutoLogin(username as String, password as String)
+        DestroyCurrentScreen()
+        ShowLoadingLabel("Iniciando sesión...")
+
+        m.authTask          = CreateObject("roSGNode", "AuthTask")
+        m.authTask.username = username
+        m.authTask.password = password
+        m.authTask.observeField("done", "OnAuthDone")
+        m.authTask.control  = "RUN"
+    end sub
+    ```
+
+    On success, `OnAuthDone()` calls `OnAuthSuccess()` which starts a `PlaylistTask` (step 7). On failure, the reason code is classified and the appropriate error UI is shown (session issue dialog, credentials dialog, or offline dialog).
+  </Step>
+
+  <Step title="Onboarding path — manual login">
+    When no saved credentials exist, `ShowOnboarding()` creates `OnboardingScreen`. The user presses a button to proceed to `LoginScreen`.
+
+    `LoginScreen` captures username and password, optionally requests the Roku account email via `getUserData`, and authenticates against the backend. On success, credentials are saved to the registry and `OnAuthSuccess()` is called.
+  </Step>
+
+  <Step title="PlaylistTask — channel catalog">
+    `OnAuthSuccess()` calls `RunPlaylistTask("startup")` which creates a `PlaylistTask` node. The task downloads and parses the M3U8 playlist, building `channelList` and `categories`.
+
+    ```brightscript
+    sub OnAuthSuccess()
+        MarkSessionNetworkHealthy()
+        StartSessionAuthChecks()
+        DestroyCurrentScreen()
+        ShowLoadingLabel("Cargando canales...")
+        RunPlaylistTask("startup")
+    end sub
+    ```
+
+    On success, `OnPlaylistDone()` is called.
+  </Step>
+
+  <Step title="PlayerScreen — live video starts">
+    `OnPlaylistDone()` resolves the startup channel index (considering any pending deep link) and calls `ShowPlayer(startIdx)`.
+
+    `ShowPlayer()` also creates `MainScreen` in the background if it does not already exist, inserting it below `PlayerScreen` in the scene tree so the overlay is ready immediately.
+
+    ```brightscript
+    sub ShowPlayer(channelIndex as Integer)
+        ' Ensure MainScreen exists underneath
+        if m.mainScreen = invalid or GTV_FindChildIndex(m.top, m.mainScreen) < 0
+            ShowMainScreen(channels, cats, channelIndex)
+        end if
+        ' Create PlayerScreen if needed
+        if m.playerScreen = invalid
+            player = CreateObject("roSGNode", "PlayerScreen")
+            ' ... observe fields ...
+            m.playerScreen = player
+        end if
+        m.playerScreen.channelIndex = channelIndex
+    end sub
+    ```
+
+    `MainScreen` dispatches the `AppLaunchComplete` beacon once it has rendered.
+  </Step>
+
+  <Step title="Overlay and settings">
+    From the player, the user can:
+
+    - Press the remote's **Up** or **OK** to request the channel overlay (`OnRequestOverlay()`), making `MainScreen` visible in overlay mode on top of the player.
+    - Navigate to a different channel in the overlay, which sets `m.playerScreen.channelIndex` on the existing player node.
+    - Open `SettingsScreen` from either `MainScreen` or `PlayerScreen` via the `openSettings` field.
+    - Trigger `OnLogoutRequested()` from settings, which clears credentials and returns to `LoginScreen`.
+  </Step>
+</Steps>
+
+## Deep-link handling
+
+GlobalTV supports one deep-link media type: `mediaType=live` with a `contentId` matching a channel ID in the playlist.
+
+### Cold-start deep link (launch event)
+
+When the channel is launched directly into a deep link, Roku passes `args` to `Main()`. The helper `GTV_IsLiveDeepLink()` validates the payload:
+
+```brightscript
+function GTV_IsLiveDeepLink(link as Dynamic) as Boolean
+    if link = invalid then return false
+    if link.contentId = invalid or link.mediaType = invalid then return false
+
+    mediaType = LCase(link.mediaType.ToStr())
+    contentId = link.contentId.ToStr()
+
+    if mediaType <> "live" then return false
+    if contentId = "" then return false
+    return true
+end function
+```
+
+If valid, `main.brs` sets `scene.launchDeepLink = args`, which triggers the `onLaunchDeepLink` observer in `MainScene`. The link is stored as `m.pendingDeepLink` and is resolved in `OnPlaylistDone()` once the channel list is available.
+
+### Warm-start deep link (input event)
+
+When the channel is already running and receives a deep link (e.g. from voice or another app), Roku sends an `roInputEvent` to the main message port:
+
+```brightscript
+else if type(msg) = "roInputEvent"
+    info = msg.GetInfo()
+    if info <> invalid
+        if GTV_IsLiveDeepLink(info)
+            scene.inputDeepLink = info
+        end if
+    end if
+```
+
+Setting `scene.inputDeepLink` triggers `onInputDeepLink` in `MainScene`, which calls `ProcessDeepLink()`. If the channel list is already loaded, `ShowPlayer(idx)` is called immediately. If the playlist has not finished loading yet, the link is stored in `m.pendingDeepLink`.
+
+```brightscript
+sub ProcessDeepLink(link as Object)
+    channels = m.global.channelList
+    if channels = invalid or channels.Count() = 0
+        m.pendingDeepLink = link
+        return
+    end if
+
+    idx = ResolveDeepLinkChannelIndex(link, channels)
+    if idx >= 0
+        ShowPlayer(idx)
+    end if
+end sub
+```
+
+<Note>
+`supports_input_launch=1` must be declared in the `manifest` for Roku to route input events to a running channel.
+</Note>
+
+## Screen transition summary
+
+| From | To | Trigger |
+|---|---|---|
+| _(launch)_ | SplashScreen | `MainScene.init()` |
+| SplashScreen | OnboardingScreen | No saved credentials |
+| SplashScreen | LoadingLabel → AuthTask | Saved credentials found |
+| OnboardingScreen | LoginScreen | User presses continue |
+| LoginScreen | LoadingLabel → PlaylistTask | Login succeeds |
+| AuthTask | LoadingLabel → PlaylistTask | Auto-login succeeds |
+| PlaylistTask | PlayerScreen + MainScreen | Playlist loaded |
+| PlayerScreen | MainScreen (overlay) | User requests overlay |
+| MainScreen (overlay) | PlayerScreen | Channel selected or back |
+| Any screen | SettingsScreen | Settings field set to `true` |
+| SettingsScreen | Previous state | Close or logout |
+| Any screen | LoginScreen | Logout or session expired |
+
+<Warning>
+DestroyCurrentScreen() tears down PlayerScreen and MainScreen together. This is intentional during logout and session-reset flows to ensure no stale state lingers in the scene tree.
+</Warning>

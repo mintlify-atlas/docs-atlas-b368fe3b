@@ -1,0 +1,137 @@
+---
+title: Logger
+description: Lightweight logging utilities for debug, warning, and error output in the GlobalTV Roku app.
+---
+
+The logger module provides three functions that write tagged messages to the Roku debug console. All functions accept a `tag` and `msg` argument so log lines are easy to filter by component.
+
+<Note>
+`GTV_Log` is compiled out of production builds. Only `GTV_Warn` and `GTV_Error` appear in sideloaded release packages.
+</Note>
+
+## Functions
+
+### GTV_Log
+
+```brightscript
+sub GTV_Log(tag as String, msg as String)
+```
+
+Prints a debug message. The call site is wrapped in a `#if IS_DEV_BUILD` preprocessor block, so the entire print statement is removed from any build where `IS_DEV_BUILD` is not `true`.
+
+<ParamField path="tag" type="String" required>
+  Short label identifying the calling component, e.g. `"HttpClient"` or `"AuthTask"`.
+</ParamField>
+
+<ParamField path="msg" type="String" required>
+  The message text to print. If either `tag` or `msg` is `invalid` the function returns immediately without printing.
+</ParamField>
+
+**Output format**
+
+```
+[GTV][<tag>] <msg>
+```
+
+**Example**
+
+```brightscript
+GTV_Log("ServerManager", "event=probe idx=0 server=http://172.17.11.2:3333")
+' Prints: [GTV][ServerManager] event=probe idx=0 server=http://172.17.11.2:3333
+```
+
+---
+
+### GTV_Warn
+
+```brightscript
+sub GTV_Warn(tag as String, msg as String)
+```
+
+Prints a warning message. Always active — no preprocessor guard. Use for recoverable conditions such as timeouts or missing optional data.
+
+<ParamField path="tag" type="String" required>
+  Short label identifying the calling component.
+</ParamField>
+
+<ParamField path="msg" type="String" required>
+  The warning message text.
+</ParamField>
+
+**Output format**
+
+```
+[GTV][WARN][<tag>] <msg>
+```
+
+**Example**
+
+```brightscript
+GTV_Warn("HttpClient", "Timeout (15000ms) during GET request")
+' Prints: [GTV][WARN][HttpClient] Timeout (15000ms) during GET request
+```
+
+---
+
+### GTV_Error
+
+```brightscript
+sub GTV_Error(tag as String, msg as String)
+```
+
+Prints an error message. Always active. Use for failures that require attention, such as failed HTTP requests or missing server responses.
+
+<ParamField path="tag" type="String" required>
+  Short label identifying the calling component.
+</ParamField>
+
+<ParamField path="msg" type="String" required>
+  The error message text.
+</ParamField>
+
+**Output format**
+
+```
+[GTV][ERROR][<tag>] <msg>
+```
+
+**Example**
+
+```brightscript
+GTV_Error("HealthCheck", "event=no_server_reachable")
+' Prints: [GTV][ERROR][HealthCheck] event=no_server_reachable
+```
+
+---
+
+## Enabling dev mode
+
+Dev-only log output is controlled by the `IS_DEV_BUILD` BrightScript constant defined in your channel's `manifest` file.
+
+```ini
+# manifest
+bs_const=IS_DEV_BUILD=true
+```
+
+Set it to `false` (or omit it entirely) for release builds:
+
+```ini
+# manifest
+bs_const=IS_DEV_BUILD=false
+```
+
+<Warning>
+Never ship a production package with `IS_DEV_BUILD=true`. The Roku BrightScript compiler strips `#if IS_DEV_BUILD` blocks entirely when the constant is false, so there is zero runtime cost in release builds.
+</Warning>
+
+## Log format summary
+
+| Function    | Always prints | Format                          |
+|-------------|---------------|---------------------------------|
+| `GTV_Log`   | No (dev only) | `[GTV][<tag>] <msg>`            |
+| `GTV_Warn`  | Yes           | `[GTV][WARN][<tag>] <msg>`      |
+| `GTV_Error` | Yes           | `[GTV][ERROR][<tag>] <msg>`     |
+
+<Tip>
+Use consistent tag names across a component so you can filter the Roku telnet console with a simple text search. For example, all messages from the HTTP layer use the tag `"HttpClient"`.
+</Tip>

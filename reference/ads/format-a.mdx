@@ -1,0 +1,91 @@
+---
+title: AdFormatA
+description: Full-width banner ad that renders along the top or bottom edge of the video viewport.
+---
+
+`AdFormatA` is a SceneGraph `Group` component that displays a full-width (or percentage-width) banner image anchored to the top or bottom of the video area. It fades in when the image loads and fades out when destroyed.
+
+## Interface fields
+
+<ParamField body="adConfig" type="assocarray">
+  Configuration object built by `AdManager.BuildNodeConfig`. Triggers `onAdConfigChanged` and drives all layout and image-loading behaviour.
+
+  | Key | Type | Default | Description |
+  |---|---|---|---|
+  | `media_url` | string | — | URL of the banner image |
+  | `position` | string | `"bottom"` | Normalised position: `top`, `top-left`, `top-right`, `bottom`, `bottom-left`, or `bottom-right` |
+  | `width_percent` | float | `100.0` | Banner width as a percentage of the viewport width |
+  | `height_percent` | float | `15.0` | Banner height as a percentage of the viewport height |
+  | `fit_mode` | string | `"fit"` | `"fill"` maps to `scaleToFill`; anything else maps to `scaleToFit` |
+  | `viewport` | assocarray | design size | `{x, y, w, h}` of the video playback area |
+</ParamField>
+
+<ParamField body="imageLoaded" type="boolean" default="false">
+  Set to `true` by `AdFormatA` once the `adPoster` Poster node reports a `ready` load status. `AdManager` observes this field to start the impression session.
+</ParamField>
+
+<ParamField body="imageError" type="boolean" default="false">
+  Set to `true` if the Poster reports a `failed` load status. `AdManager` observes this to destroy the slot and increment the consecutive-failure counter.
+</ParamField>
+
+## Visual behaviour and positioning
+
+The banner width and height are calculated as percentages of the viewport dimensions:
+
+```brightscript
+w = Int(sw * wPct / 100.0)   ' default wPct = 100.0
+h = Int(sh * hPct / 100.0)   ' default hPct = 15.0
+```
+
+The `position` value is normalised and resolved to one of six anchor points:
+
+| Position value | Anchor |
+|---|---|
+| `top` | Horizontally centred at the top edge |
+| `top-left` | Top-left corner |
+| `top-right` | Top-right corner |
+| `bottom` *(default)* | Horizontally centred at the bottom edge |
+| `bottom-left` | Bottom-left corner |
+| `bottom-right` | Bottom-right corner |
+
+The component uses a 50 ms repeating `Timer` (`fadeTimer`) to drive an opacity animation. Each tick increments opacity by approximately 0.1667 (six steps to fully opaque). `FadeOut` is called by `AdManager` before the node is removed.
+
+## XML component definition
+
+```xml
+<component name="AdFormatA" extends="Group">
+    <interface>
+        <field id="adConfig"     type="assocarray" onChange="onAdConfigChanged" />
+        <field id="imageLoaded"  type="boolean"    value="false" />
+        <field id="imageError"   type="boolean"    value="false" />
+    </interface>
+    <children>
+        <Poster id="adPoster" loadDisplayMode="scaleToFit" visible="false" />
+        <Timer  id="fadeTimer" duration="0.05" repeat="true" />
+    </children>
+</component>
+```
+
+## How it renders from ad data
+
+<Steps>
+  <Step title="AdManager sets adConfig">
+    After creating the `AdFormatA` node and appending it to the scene, `AdManager` sets `node.adConfig = BuildNodeConfig(rec)`. This triggers `onAdConfigChanged`.
+  </Step>
+  <Step title="Layout is computed">
+    `onAdConfigChanged` reads `viewport`, `width_percent`, `height_percent`, `position`, and `fit_mode` from `adConfig` and applies the resulting frame to the `adPoster` Poster node.
+  </Step>
+  <Step title="Image loads">
+    `adPoster.uri` is set to `cfg.media_url`. The Poster is hidden (`visible = false`) until the load status becomes `ready`. If the image is already cached and ready, it is shown immediately without waiting for a load event.
+  </Step>
+  <Step title="Fade in">
+    On a successful load, `FadeIn` starts the `fadeTimer`. The banner becomes visible and fully opaque after approximately 300 ms (6 ticks × 50 ms).
+  </Step>
+  <Step title="imageLoaded reported">
+    `m.top.imageLoaded = true` is set, which `AdManager` observes to record the impression start time.
+  </Step>
+</Steps>
+
+<Note>
+Format A is the only format that uses the video playback viewport (`videoViewport`) rather than the base viewport. Its position is always relative to the active video area, not the full screen.
+</Note>

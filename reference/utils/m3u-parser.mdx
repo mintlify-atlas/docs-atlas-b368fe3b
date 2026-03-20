@@ -1,0 +1,158 @@
+---
+title: M3U parser
+description: Functions for parsing Extended M3U playlists into typed channel objects for the GlobalTV Roku channel grid.
+---
+
+The M3U parser converts a raw M3U playlist string into a structured list of channel objects and a deduplicated list of category names. It is the single entry point for turning a server playlist response into the data model used by the main screen grid.
+
+## Main function
+
+### GTV_ParseM3U
+
+```brightscript
+function GTV_ParseM3U(text as String) as Object
+```
+
+Parses an Extended M3U playlist and returns a result object.
+
+<ParamField path="text" type="String" required>
+  The raw M3U playlist string. Returns an empty result immediately if `invalid` or `""`.
+</ParamField>
+
+**Return value**
+
+An `roAssociativeArray` with the following fields:
+
+| Field                   | Type    | Description                                                    |
+|-------------------------|---------|----------------------------------------------------------------|
+| `channels`              | Array   | Sorted array of channel objects (sorted by `number` ascending) |
+| `categories`            | Array   | Unique category name strings, in insertion order               |
+| `droppedMissingNumber`  | Integer | Channels skipped because `channel-number` was absent (strict mode only) |
+| `droppedDuplicateNumber`| Integer | Channels skipped because their `channel-number` was already seen |
+| `fallbackAssigned`      | Integer | Channels that received an auto-incremented number (lenient mode only) |
+
+**Example**
+
+```brightscript
+raw = GTV_HttpGet(serverUrl + "/auth/user/pass/playlist/m3u8/hls").body
+result = GTV_ParseM3U(raw)
+GTV_Log("Playlist", "channels=" + result.channels.Count().ToStr() + " dropped=" + result.droppedMissingNumber.ToStr())
+```
+
+---
+
+## Channel object structure
+
+Each element in `result.channels` is an `roAssociativeArray` with these fields:
+
+| Field       | Type    | Source attribute         | Description                                             |
+|-------------|---------|--------------------------|----------------------------------------------------------|
+| `id`        | String  | `tvg-id`                 | Channel identifier from the playlist                    |
+| `name`      | String  | `tvg-name` or post-comma | Display name of the channel                             |
+| `logo`      | String  | `tvg-logo`               | URL to the channel logo image                           |
+| `group`     | String  | `group-title`            | Category name; defaults to `"General"` if absent        |
+| `number`    | Integer | `channel-number`         | Channel number used for sorting and `contentId`         |
+| `url`       | String  | Next non-comment line    | Normalized stream URL                                   |
+| `contentId` | String  | Derived from `number`    | String representation of `number`, used as a unique key |
+
+**Example channel object**
+
+```brightscript
+{
+    id        : "cnn_en"
+    name      : "CNN"
+    logo      : "https://example.com/logos/cnn.png"
+    group     : "News"
+    number    : 101
+    url       : "https://stream.example.com/cnn/index.m3u8"
+    contentId : "101"
+}
+```
+
+---
+
+## Strict channel number mode
+
+The parser behaviour is controlled by `AppConstants().PARSER_STRICT_CHANNEL_NUMBER` (default: `true`).
+
+| Mode           | `PARSER_STRICT_CHANNEL_NUMBER` | Channels without `channel-number`               |
+|----------------|--------------------------------|-------------------------------------------------|
+| **Strict**     | `true`                         | Dropped; counted in `droppedMissingNumber`      |
+| **Lenient**    | `false`                        | Assigned a sequential fallback number; counted in `fallbackAssigned` |
+
+<Warning>
+Duplicate channel numbers are always dropped regardless of mode. The first channel with a given number wins; subsequent duplicates are counted in `droppedDuplicateNumber`.
+</Warning>
+
+---
+
+## URL normalisation
+
+`GTV_NormalizeChannelUrl` rewrites non-standard scheme prefixes before the URL is stored:
+
+| Raw scheme    | Normalised to          | Notes                                                |
+|---------------|------------------------|------------------------------------------------------|
+| `hls://http://...`   | `http://...`  | Strips `hls://` wrapper                              |
+| `hls://https://...`  | `https://...` | Strips `hls://` wrapper                              |
+| `hls://<host>`       | `http://<host>` | Adds `http://` when no inner scheme is present     |
+| `hlss://https://...` | `https://...` | Strips `hlss://` wrapper                             |
+| `hlss://<host>`      | `https://<host>` | Adds `https://` when no inner scheme is present   |
+| Anything else        | Unchanged     |                                                      |
+
+---
+
+## Supported M3U format
+
+The parser recognises Extended M3U lines starting with `#EXTINF`. Attributes must use `key="value"` or `key='value'` syntax. The channel name may also be placed after the final comma on the `#EXTINF` line.
+
+```m3u
+#EXTM3U
+#EXTINF:-1 tvg-id="cnn" tvg-name="CNN" tvg-logo="https://example.com/cnn.png" group-title="News" channel-number="101",CNN
+https://stream.example.com/cnn/index.m3u8
+
+#EXTINF:-1 tvg-id="espn" tvg-name="ESPN" group-title="Sports" channel-number="201",ESPN
+https://stream.example.com/espn/index.m3u8
+```
+
+<Note>
+Blank lines and comment lines (starting with `#`) between `#EXTINF` and the stream URL are skipped automatically. Only the first non-blank, non-comment line after `#EXTINF` is used as the URL.
+</Note>
+
+---
+
+## Helper functions
+
+<AccordionGroup>
+  <Accordion title="GTV_ExtractAttr(src, attrName)">
+    Extracts the value of a named attribute from an `#EXTINF` line.
+
+    ```brightscript
+    function GTV_ExtractAttr(src as String, attrName as String) as String
+    ```
+
+    Handles both double-quoted (`"`) and single-quoted (`'`) values, as well as unquoted values terminated by a space or tab. Returns `""` if the attribute is not found.
+  </Accordion>
+  <Accordion title="GTV_NormalizeChannelUrl(rawUrl)">
+    Rewrites `hls://` and `hlss://` scheme prefixes to standard `http://` or `https://` URLs.
+
+    ```brightscript
+    function GTV_NormalizeChannelUrl(rawUrl as String) as String
+    ```
+  </Accordion>
+  <Accordion title="GTV_TrimStr(s)">
+    Strips leading and trailing spaces, tabs, and carriage-return characters from a string.
+
+    ```brightscript
+    function GTV_TrimStr(s as String) as String
+    ```
+  </Accordion>
+  <Accordion title="GTV_SortChannels(arr)">
+    Sorts a channel array in ascending order by `channel.number` using insertion sort.
+
+    ```brightscript
+    function GTV_SortChannels(arr as Object) as Object
+    ```
+
+    Returns the same array reference after sorting in place.
+  </Accordion>
+</AccordionGroup>

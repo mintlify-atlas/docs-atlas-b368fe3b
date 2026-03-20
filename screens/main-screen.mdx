@@ -1,0 +1,149 @@
+---
+title: Main Screen
+description: Channel list and category browsing grid. Fires the AppLaunchComplete beacon and dispatches channel selections to PlayerScreen.
+---
+
+The `MainScreen` displays the full channel catalog after a successful login. It provides category tab navigation, a scrollable channel list, and a selection overlay. It is the screen that satisfies the Roku `AppLaunchComplete` certification requirement.
+
+## Overlay mode
+
+The screen operates in two modes controlled by the `overlayMode` boolean field:
+
+- **`overlayMode = false`** — the list is hidden and focus is released (used when PlayerScreen is fullscreen in the background)
+- **`overlayMode = true`** — the overlay is animated in and the channel list receives input
+
+When overlay mode activates, a 220ms fade-in animation runs on all UI elements:
+
+```xml
+<!-- components/MainScreen/MainScreen.xml -->
+<Animation id="overlayInAnim" duration="0.22" repeat="false">
+    <FloatFieldInterpolator key="[0.0, 1.0]" keyValue="[0.0, 1.0]"
+        fieldToInterp="bgOverlay.opacity" />
+    <!-- ... additional interpolators for all top-bar and list nodes -->
+</Animation>
+```
+
+## Channel grid layout
+
+Channels are rendered as a manually managed list of `ChannelRowItem` nodes rather than relying on the built-in `RowList` component directly. This avoids `RowList` focus and animation quirks with live-switching.
+
+Each row is 92px tall with 8px spacing (both scaled via the layout context). A sliding window of up to 5 visible rows is maintained:
+
+```brightscript
+' components/MainScreen/MainScreen.brs
+m.rowListVisibleRows = 5
+m.rowListItemH = 92
+m.rowListItemSpacing = 8
+```
+
+### ChannelRowItem tile
+
+Each `ChannelRowItem` (520×92px default) has:
+
+- A **colored badge** on the left showing the channel number
+- A **name label** (`numberLabel`) showing the channel name
+- A **category label** (`nameLabel`) showing the group
+- A **focus frame** (teal `0x2CD5C4FF` border) when focused
+- A **purple background** (`0x7F35B2BA`) when the item is the currently playing channel
+
+Badge color is determined by category keyword matching:
+
+```brightscript
+' components/MainScreen/ChannelRowItem.brs
+function GTV_ChannelBadgeColor(category as String) as String
+    cat = LCase(GTV_SafeTrimLocal(category))
+    if InStr(1, cat, "nac") > 0 then return "0xFFD700FF"  ' Nacional - gold
+    if InStr(1, cat, "dep") > 0 then return "0x2CD5C4FF"  ' Deportes - teal
+    if InStr(1, cat, "reg") > 0 then return "0x7F35B2FF"  ' Regional - purple
+    return "0x0004FFFF"                                     ' Default - blue
+end function
+```
+
+<Note>
+The `CHANNEL_TILE_MODE` constant in `AppConstants` is set to `"badge_only"`. This value is available for conditional rendering logic that shows only the number badge without thumbnail art.
+</Note>
+
+## Category tabs
+
+Categories are extracted from the playlist's `group` field for each channel. A synthetic "Todos" category (key `__all__`) is always prepended.
+
+```brightscript
+' components/MainScreen/MainScreen.brs
+sub BuildCategoryIndex(channels as Object)
+    allKey = "__all__"
+    m.categoryMap[allKey] = { label: "Todos", items: [] }
+    m.categoryOrder.Push(allKey)
+
+    for each ch in channels
+        m.categoryMap[allKey].items.Push(ch)
+        cat = ch.group
+        if cat = invalid or cat = "" then cat = "General"
+        catKey = LCase(cat)
+        if not m.categoryMap.DoesExist(catKey)
+            m.categoryMap[catKey] = { label: cat, items: [] }
+            m.categoryOrder.Push(catKey)
+        end if
+        m.categoryMap[catKey].items.Push(ch)
+    end for
+end sub
+```
+
+The active category tab is highlighted with a teal (`0x2CD5C4FF`) border on all four sides and a teal dot indicator below it. Inactive tabs use muted borders (`0x2F2F2FBA`).
+
+Left/Right keys in overlay mode switch categories. A 140ms pulse animation plays on the tab rail during the switch.
+
+## AppLaunchComplete beacon
+
+The `AppLaunchComplete` Roku certification beacon is fired once, the first time channels are loaded and the row list is built:
+
+```brightscript
+' components/MainScreen/MainScreen.brs
+sub SignalAppLaunchCompleteOnce()
+    scene = m.top.GetScene()
+    if scene <> invalid
+        if m.global.appLaunchBeaconSent <> true
+            scene.signalBeacon("AppLaunchComplete")
+            m.global.appLaunchBeaconSent = true
+        end if
+    end if
+end sub
+```
+
+This is called from `onChannelsChanged()` after the category index and row list are built.
+
+<Warning>
+The beacon is only sent once per session. If channels are refreshed from SettingsScreen, it is not re-sent.
+</Warning>
+
+## Dispatching to PlayerScreen
+
+When the user presses OK on a focused channel row, `CommitFocusedChannel()` resolves the flat index across all channels and emits it:
+
+```brightscript
+sub EmitChannelSelected(flatIndex as Integer)
+    m.top.channelSelected = -1
+    m.top.channelSelected = flatIndex
+end sub
+```
+
+`MainScene` observes `channelSelected` and calls `PlayChannel(flatIndex)` on `PlayerScreen`.
+
+## Header elements
+
+The top bar includes:
+
+- GlobalTV logo (right-aligned)
+- Brand tagline labels
+- A `WifiWidget` showing current connection status
+- A live clock label updated every 5 seconds by `clockTimer`
+
+## Interface fields
+
+```xml
+<!-- components/MainScreen/MainScreen.xml -->
+<field id="channels"        type="array"   onChange="onChannelsChanged" />
+<field id="channelSelected" type="integer" value="-1" />
+<field id="overlayMode"     type="boolean" value="false" onChange="onOverlayModeChanged" />
+<field id="closeOverlay"    type="integer" value="0" />
+<field id="openSettings"    type="boolean" value="false" />
+```

@@ -1,0 +1,164 @@
+---
+title: "Manifest"
+description: "Reference for all fields in the Roku manifest file — app identity, icons, splash screens, resolution, and build flags."
+---
+
+The `manifest` file is required by every Roku channel. It sits at the root of the project and tells Roku the channel's identity, icons, splash screens, supported resolutions, and feature flags. Every field is plain `key=value` — no quotes, no JSON.
+
+```text manifest
+title=GlobalTV
+major_version=1
+minor_version=0
+build_version=6
+
+mm_icon_focus_hd=pkg:/images/logo-hd.png
+mm_icon_focus_fhd=pkg:/images/logo-fhd.png
+
+splash_screen_fhd=pkg:/images/splash_fhd.png
+splash_screen_hd=pkg:/images/splash_hd.png
+splash_screen_sd=pkg:/images/splash_sd.png
+splash_color=#1a1a2e
+splash_min_time=1500
+
+ui_resolutions=fhd,hd
+rsg_version=1.3
+
+supports_input_launch=1
+splash_rsg_optimization=1
+
+bs_const=IS_DEV_BUILD=false
+```
+
+## App identity
+
+| Field | Value | Description |
+|---|---|---|
+| `title` | `GlobalTV` | The channel name displayed in the Roku home screen and Channel Store. |
+| `major_version` | `1` | Major version number. Increment for significant releases. |
+| `minor_version` | `0` | Minor version number. Increment for feature releases. |
+| `build_version` | `6` | Build number. **Must be incremented for every submission to the Channel Store.** |
+
+### Incrementing the build version
+
+Roku requires a unique `build_version` for every package you submit. The channel store rejects packages with a build version that has already been used.
+
+<Warning>
+Increment `build_version` before running `make pkg`. Submitting with the same build number as a previous submission will fail certification.
+</Warning>
+
+A simple convention is to increment sequentially:
+
+```text manifest
+' Before submission
+build_version=7
+```
+
+The full version string shown in Roku diagnostics is `major_version.minor_version.build_version` — for example, `1.0.6`.
+
+## Channel icons
+
+| Field | Path | Description |
+|---|---|---|
+| `mm_icon_focus_hd` | `pkg:/images/logo-hd.png` | Channel tile icon at HD resolution (336×210 px). |
+| `mm_icon_focus_fhd` | `pkg:/images/logo-fhd.png` | Channel tile icon at FHD resolution (540×405 px). |
+
+<Note>
+Both `mm_icon_focus_hd` and `mm_icon_focus_fhd` are required for certification. Missing icons cause the channel tile to display a generic placeholder.
+</Note>
+
+The `pkg:/` prefix refers to the root of the packaged channel ZIP — you do not need to include a leading slash in the path.
+
+## Splash screens
+
+The splash screen is shown immediately when the channel launches, before SceneGraph initializes.
+
+| Field | Path | Description |
+|---|---|---|
+| `splash_screen_fhd` | `pkg:/images/splash_fhd.png` | Splash image for FHD displays (1920×1080 px). |
+| `splash_screen_hd` | `pkg:/images/splash_hd.png` | Splash image for HD displays (1280×720 px). |
+| `splash_screen_sd` | `pkg:/images/splash_sd.png` | Splash image for SD displays (720×480 px). |
+| `splash_color` | `#1a1a2e` | Background fill color shown before the splash image loads. Matches `COLOR_BG_CARD` from [AppConstants](/configuration/app-constants). |
+| `splash_min_time` | `1500` | Minimum time in milliseconds the splash is held on screen. |
+
+<Tip>
+Set `splash_color` to match the dominant background color of your splash image. This prevents a visible flash between the color fill and the image loading.
+</Tip>
+
+The `splash_min_time` of 1500 ms is coordinated with `SPLASH_MS` in [AppConstants](/configuration/app-constants), which controls the in-app `SplashScreen` component display duration.
+
+## Resolution and SceneGraph version
+
+| Field | Value | Description |
+|---|---|---|
+| `ui_resolutions` | `fhd,hd` | Comma-separated list of resolutions the channel actively supports. Roku uses the best-matched splash and icon assets. |
+| `rsg_version` | `1.3` | Roku SceneGraph API version. `1.3` is required for current RSG features including `roSGScreen`. |
+
+<Note>
+`ui_resolutions=fhd,hd` tells Roku the channel is designed for both 1920×1080 and 1280×720. SD devices are still supported through asset fallback but are not in the declared resolution list.
+</Note>
+
+## Feature flags
+
+| Field | Value | Description |
+|---|---|---|
+| `supports_input_launch=1` | `1` | Enables the channel to receive roInput events after launch. Required for deep linking via input events. |
+| `splash_rsg_optimization=1` | `1` | Keeps the splash visible until the SceneGraph scene signals it is ready. Prevents a blank frame between splash and first render. |
+
+## Compile-time constants (`bs_const`)
+
+The `bs_const` field defines BrightScript constants that are evaluated at compile time. Conditional code blocks guarded by these constants are completely stripped from the compiled output — not just skipped at runtime.
+
+```text manifest
+bs_const=IS_DEV_BUILD=false
+```
+
+| Constant | Default | Description |
+|---|---|---|
+| `IS_DEV_BUILD` | `false` | When `true`, enables verbose debug logging throughout the app. Set to `true` during local development; always `false` before submitting to the Channel Store. |
+
+Usage in BrightScript:
+
+```brightscript
+#if IS_DEV_BUILD
+    print "[GTV][DEBUG] verbose output enabled"
+#end if
+```
+
+<Warning>
+Never submit a package built with `IS_DEV_BUILD=true`. Debug output can significantly increase log volume and may expose internal state in production.
+</Warning>
+
+To enable debug logging locally, temporarily change the manifest:
+
+```text manifest
+bs_const=IS_DEV_BUILD=true
+```
+
+Then revert before packaging for submission.
+
+## Certification requirements
+
+The following fields are required by the Roku Channel Store certification checklist:
+
+<AccordionGroup>
+  <Accordion title="Required fields">
+    | Field | Requirement |
+    |---|---|
+    | `title` | Must match the channel name registered in the Developer Dashboard. |
+    | `major_version`, `minor_version`, `build_version` | All three must be present. `build_version` must be unique per submission. |
+    | `mm_icon_focus_hd` | HD channel icon — 336×210 px PNG. |
+    | `mm_icon_focus_fhd` | FHD channel icon — 540×405 px PNG. |
+    | `splash_screen_fhd` | FHD splash — 1920×1080 px PNG. |
+    | `splash_screen_hd` | HD splash — 1280×720 px PNG. |
+    | `splash_screen_sd` | SD splash — 720×480 px PNG. |
+    | `ui_resolutions` | Must include at least `hd`. |
+    | `rsg_version` | Must be `1.3` for SceneGraph channels. |
+  </Accordion>
+  <Accordion title="Recommended flags">
+    | Field | Recommendation |
+    |---|---|
+    | `splash_rsg_optimization=1` | Prevents blank frames during startup — strongly recommended. |
+    | `supports_input_launch=1` | Required if the channel handles deep links after launch. |
+    | `bs_const=IS_DEV_BUILD=false` | Must be `false` in submitted packages. |
+  </Accordion>
+</AccordionGroup>

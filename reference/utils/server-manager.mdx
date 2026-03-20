@@ -1,0 +1,279 @@
+---
+title: Server manager
+description: Server profile management, probe ordering, and active server resolution for GlobalTV Roku.
+---
+
+The server manager handles everything related to backend server selection: loading and saving profiles, building the probe order for startup health checks, normalising URLs, and finding the first reachable server.
+
+## Concepts
+
+**Server profile** — A named backend endpoint with a `type` of either `lan` (local network) or `wan` (internet). Profiles are stored as a JSON array in the registry under the `serverProfiles` key.
+
+**Probe list** — The ordered sequence of URLs that `GTV_FindActiveServer` tests one by one until one responds successfully.
+
+**Active server** — The first server from the probe list that passes a health-check ping. Its URL is written to `m.global.activeServer` by the calling task and persisted to the registry via `GTV_RegSaveLastServer`.
+
+---
+
+## Default profiles
+
+```brightscript
+function GTV_DefaultServerProfiles() as Object
+```
+
+Returns the two built-in server profiles used when no custom profiles have been saved:
+
+| id               | name     | baseUrl                        | type  |
+|------------------|----------|--------------------------------|-------|
+| `local_default`  | Local    | `http://172.17.11.2:3333`      | `lan` |
+| `public_default` | Publico  | `https://admin.globaltv.lat`   | `wan` |
+
+---
+
+## Profile management
+
+### GTV_LoadServerProfiles
+
+```brightscript
+function GTV_LoadServerProfiles() as Object
+```
+
+Loads server profiles from the registry. Parses the JSON stored at `REG_KEY_SERVER_PROFILES`, sanitises the result, and falls back to `GTV_DefaultServerProfiles()` if the registry is empty or invalid.
+
+**Return value** — A clean array of server profile objects.
+
+---
+
+### GTV_SaveServerProfiles
+
+```brightscript
+sub GTV_SaveServerProfiles(profiles as Object)
+```
+
+Sanitises `profiles` and writes the resulting array as JSON to `REG_KEY_SERVER_PROFILES`. Falls back to the default profiles if the sanitised list is empty.
+
+---
+
+### GTV_ServerList
+
+```brightscript
+function GTV_ServerList() as Object
+```
+
+Returns a flat array of base URL strings from all loaded profiles.
+
+**Example**
+
+```brightscript
+urls = GTV_ServerList()
+' ["http://172.17.11.2:3333", "https://admin.globaltv.lat"]
+```
+
+---
+
+### GTV_ServerCreateProfile
+
+```brightscript
+function GTV_ServerCreateProfile(name as String, baseUrl as String, existing = invalid as Dynamic) as Dynamic
+```
+
+Creates a new server profile object.
+
+<ParamField path="name" type="String" required>
+  Display name for the server. Uses the normalised URL if blank.
+</ParamField>
+
+<ParamField path="baseUrl" type="String" required>
+  The server base URL. Must start with `http://` or `https://`. Returns `invalid` if the URL cannot be normalised.
+</ParamField>
+
+<ParamField path="existing" type="Dynamic">
+  Optional existing profile. When provided, its `id`, `builtIn`, and `enabled` fields are preserved.
+</ParamField>
+
+**Return value** — A new profile `roAssociativeArray`, or `invalid` on invalid URL.
+
+---
+
+### GTV_ServerUpsertProfile
+
+```brightscript
+function GTV_ServerUpsertProfile(profiles as Object, profile as Object) as Object
+```
+
+Inserts or replaces a profile in the list, matched by `id`. Returns the updated array.
+
+---
+
+### GTV_ServerDeleteProfile
+
+```brightscript
+function GTV_ServerDeleteProfile(profiles as Object, profileId as String) as Object
+```
+
+Removes the profile with the given `id` from the list. If removing the profile would leave the list empty, the original list is returned unchanged.
+
+---
+
+### GTV_ServerCanDelete
+
+```brightscript
+function GTV_ServerCanDelete(profiles as Object, profileId as String) as Boolean
+```
+
+Returns `true` if the profile exists and the list has more than one entry.
+
+---
+
+## Server lookup
+
+### GTV_ServerGetProfileById
+
+```brightscript
+function GTV_ServerGetProfileById(profiles as Object, profileId as String) as Dynamic
+```
+
+Finds a profile by its `id`. Returns `invalid` if not found.
+
+---
+
+### GTV_ServerGetProfileByBaseUrl
+
+```brightscript
+function GTV_ServerGetProfileByBaseUrl(profiles as Object, baseUrl as String) as Dynamic
+```
+
+Finds a profile whose normalised `baseUrl` matches the given URL. Returns `invalid` if not found.
+
+---
+
+## Probe ordering
+
+### GTV_ServerBuildAutoProbeList
+
+```brightscript
+function GTV_ServerBuildAutoProbeList() as Object
+```
+
+Builds the full probe order for startup. LAN servers are listed first, repeated `SERVER_LAN_FORCE_RETRIES` times (default: `3`), followed by WAN servers once.
+
+**LAN retry behaviour** — Because LAN servers may take a moment to become reachable after the device wakes, they are probed multiple times before falling through to the public server.
+
+```
+Probe order with SERVER_LAN_FORCE_RETRIES=3 and one LAN server:
+  1. http://172.17.11.2:3333   (attempt 1)
+  2. http://172.17.11.2:3333   (attempt 2)
+  3. http://172.17.11.2:3333   (attempt 3)
+  4. https://admin.globaltv.lat
+```
+
+<Note>
+`SERVER_LAN_FORCE_RETRIES` is read from `AppConstants()`. Setting it to `1` disables the retry burst and probes each LAN server only once.
+</Note>
+
+---
+
+### GTV_ServerBuildRequestSequence
+
+```brightscript
+function GTV_ServerBuildRequestSequence(preferredBaseUrl = "" as String) as Object
+```
+
+Builds a probe list identical to `GTV_ServerBuildAutoProbeList`, but moves `preferredBaseUrl` to the front. Use this when a previously working server is known.
+
+<ParamField path="preferredBaseUrl" type="String">
+  A base URL to prioritise. When empty, the standard auto-probe order is returned unchanged.
+</ParamField>
+
+---
+
+### GTV_FindActiveServer
+
+```brightscript
+function GTV_FindActiveServer(forcedServer = "" as String) as String
+```
+
+Iterates the probe list and returns the first server URL that responds to a health-check ping.
+
+<ParamField path="forcedServer" type="String">
+  When non-empty, only this URL is probed. Used to verify a specific server without cycling through the full list.
+</ParamField>
+
+**Return value** — The base URL of the first reachable server, or `""` if none respond.
+
+On success, the URL is saved to the registry via `GTV_RegSaveLastServer`.
+
+**Example**
+
+```brightscript
+lastServer = GTV_RegLoadLastServer()
+active = GTV_FindActiveServer(lastServer)
+if active = ""
+    GTV_Error("Startup", "No server reachable")
+else
+    m.global.setField("activeServer", active)
+end if
+```
+
+---
+
+## URL utilities
+
+### GTV_ServerNormalizeBaseUrl
+
+```brightscript
+function GTV_ServerNormalizeBaseUrl(raw as Dynamic) as String
+```
+
+Normalises a server base URL:
+- Strips a trailing `/`
+- Returns `""` for any URL that does not start with `http://` or `https://`
+- Corrects `http://172.17.11.2` (no port) to `http://172.17.11.2:3333`
+
+---
+
+### GTV_ServerInferType
+
+```brightscript
+function GTV_ServerInferType(baseUrl as String) as String
+```
+
+Returns `"lan"` for private-network IP ranges (`172.17.x.x`, `192.168.x.x`, `10.x.x.x`, `localhost`), and `"wan"` for everything else.
+
+---
+
+### GTV_ServerDescribe
+
+```brightscript
+function GTV_ServerDescribe(profile as Dynamic) as String
+```
+
+Returns a human-readable description of a profile for logging and UI display.
+
+**Format**
+
+```
+<name> [<TYPE>] - <baseUrl>
+```
+
+**Example**
+
+```brightscript
+desc = GTV_ServerDescribe(profile)
+' "Local [LAN] - http://172.17.11.2:3333"
+```
+
+---
+
+## Server profile object structure
+
+```brightscript
+{
+    id      : "local_default"           ' Unique string ID
+    name    : "Local"                   ' Display name
+    baseUrl : "http://172.17.11.2:3333" ' Normalised base URL
+    type    : "lan"                     ' "lan" or "wan"
+    builtIn : true                      ' true for default profiles
+    enabled : true                      ' Whether the profile is active
+}
+```

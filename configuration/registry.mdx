@@ -1,0 +1,194 @@
+---
+title: "Registry"
+description: "How GlobalTV Roku uses the Roku persistent registry to store credentials, server selection, and user preferences across sessions."
+---
+
+Roku provides a persistent key-value store called the **registry** (`roRegistry` / `roRegistrySection`). GlobalTV uses it to remember credentials, the last active server, the last viewed channel, and the user's safe-area preference. All values survive channel restarts and device reboots until the channel is uninstalled or the user clears them.
+
+## Registry section
+
+All values are stored under a single registry section named **`GlobalTV`**, defined by `REG_SECTION` in [AppConstants](/configuration/app-constants).
+
+```brightscript
+reg = CreateObject("roRegistrySection", "GlobalTV")
+```
+
+Grouping all keys under one section makes it straightforward to enumerate or clear the channel's entire stored state.
+
+## Keys
+
+| Key (`REG_KEY_*`) | Key name | Type | Description |
+|---|---|---|---|
+| `REG_KEY_USER` | `username` | String | Authenticated username. Written on successful login, deleted on logout or auth failure. |
+| `REG_KEY_PASS` | `password` | String | Authenticated password. Written alongside `username`, deleted at the same time. |
+| `REG_KEY_SERVER` | `lastServer` | String | Base URL of the last server that responded successfully to a health check. Used to prefer the same server on the next launch. |
+| `REG_KEY_CHANNEL` | `lastChannelIndex` | String (int) | Zero-based index of the last channel the user viewed. Restored on startup so the grid opens at the same position. |
+| `REG_KEY_SAFE_MARGIN` | `uiSafeMarginPct` | String (int) | User-configured safe-area margin percentage (0–10). Overrides the default from `UI_SAFE_MARGIN_PCT`. |
+| `REG_KEY_SERVER_PROFILES` | `serverProfiles` | String (JSON) | JSON-serialized array of server profile objects. Allows the user to add, edit, and remove backend servers from the Settings screen. |
+
+## RegistryManager API
+
+`RegistryManager.brs` provides typed wrappers around the raw `roRegistrySection` calls. All reads, writes, and deletes go through these helpers.
+
+### Core read/write/delete
+
+```brightscript
+' Read a key, returning defaultVal if it does not exist
+function GTV_RegRead(key as String, defaultVal = "" as String) as String
+    reg = CreateObject("roRegistrySection", AppConstants().REG_SECTION)
+    if reg.Exists(key)
+        return reg.Read(key)
+    end if
+    return defaultVal
+end function
+
+' Write a key and flush immediately to disk
+sub GTV_RegWrite(key as String, value as String)
+    reg = CreateObject("roRegistrySection", AppConstants().REG_SECTION)
+    reg.Write(key, value)
+    reg.Flush()
+end sub
+
+' Delete a key if it exists, then flush
+sub GTV_RegDelete(key as String)
+    reg = CreateObject("roRegistrySection", AppConstants().REG_SECTION)
+    if reg.Exists(key)
+        reg.Delete(key)
+        reg.Flush()
+    end if
+end sub
+```
+
+<Note>
+`reg.Flush()` is called after every write and delete. Without it, changes are buffered in memory and may not survive an unexpected channel exit.
+</Note>
+
+### Credentials
+
+```brightscript
+' Returns true if both username and password are stored
+function GTV_RegHasCredentials() as Boolean
+
+' Returns { username: String, password: String } or invalid
+function GTV_RegLoadCredentials() as Object
+
+' Writes username and password to the registry
+sub GTV_RegSaveCredentials(username as String, password as String)
+
+' Deletes both username and password keys
+sub GTV_RegClearCredentials()
+```
+
+### Server selection
+
+```brightscript
+' Returns the normalized base URL of the last known-good server
+function GTV_RegLoadLastServer() as String
+
+' Saves a server base URL after a successful health check
+sub GTV_RegSaveLastServer(serverUrl as String)
+```
+
+URLs are normalized before storage — trailing slashes are stripped and bare `http://172.17.11.2` is expanded to `http://172.17.11.2:3333`.
+
+### Channel index
+
+```brightscript
+' Returns the stored channel index, or 0 if none is stored
+function GTV_RegLoadLastChannelIndex() as Integer
+
+' Saves the current channel index
+sub GTV_RegSaveLastChannelIndex(idx as Integer)
+```
+
+### Safe-area margin
+
+```brightscript
+' Returns the stored margin percentage, clamped to [0, 10]
+function GTV_RegLoadSafeMarginPct() as Integer
+
+' Saves the margin percentage, clamped before writing
+sub GTV_RegSaveSafeMarginPct(pct as Integer)
+```
+
+If no value is stored, `GTV_RegLoadSafeMarginPct()` falls back to the compile-time default from `UI_SAFE_MARGIN_PCT` in [AppConstants](/configuration/app-constants).
+
+### Cache clear
+
+```brightscript
+' Deletes lastServer and lastChannelIndex, but not credentials
+sub GTV_RegClearCache()
+    c = AppConstants()
+    GTV_RegDelete(c.REG_KEY_SERVER)
+    GTV_RegDelete(c.REG_KEY_CHANNEL)
+end sub
+```
+
+This is called from the Settings screen's "Refresh" action to force the app to re-probe servers and reload the channel list from scratch without logging the user out.
+
+## When credentials are cleared
+
+Credentials are deleted from the registry in two situations:
+
+<AccordionGroup>
+  <Accordion title="Explicit logout">
+    When the user selects **Logout** in the Settings screen, `GTV_RegClearCredentials()` is called immediately. Both `username` and `password` keys are deleted and the registry is flushed. The app then navigates back to the onboarding screen.
+  </Accordion>
+  <Accordion title="Auth failure">
+    When a background session check or startup auth attempt returns `AUTH_REASON_CREDENTIALS` or `AUTH_REASON_INACTIVE`, the app clears stored credentials to prevent repeated failed auth attempts on the next launch. The user is shown an appropriate error and redirected to the login screen.
+  </Accordion>
+</AccordionGroup>
+
+<Warning>
+Credentials are stored as plaintext strings in the Roku registry. The registry is private to the channel and not accessible to other channels or to the user through the Roku OS UI, but the values are not encrypted at rest.
+</Warning>
+
+## Server profiles
+
+`REG_KEY_SERVER_PROFILES` stores a JSON array managed by `ServerManager.brs`. Each profile has the following shape:
+
+```brightscript
+' Profile object structure
+{
+    id      : "public_default"   ' Unique identifier
+    name    : "Publico"          ' Display name
+    baseUrl : "https://admin.globaltv.lat"
+    type    : "wan"              ' "lan" or "wan"
+    builtIn : true               ' Built-in profiles cannot be deleted
+    enabled : true
+}
+```
+
+If no profiles are stored, `GTV_LoadServerProfiles()` falls back to the built-in defaults defined in `GTV_DefaultServerProfiles()`:
+
+```brightscript
+function GTV_DefaultServerProfiles() as Object
+    return [
+        {
+            id: "local_default"
+            name: "Local"
+            baseUrl: "http://172.17.11.2:3333"
+            type: "lan"
+            builtIn: true
+            enabled: true
+        }
+        {
+            id: "public_default"
+            name: "Publico"
+            baseUrl: "https://admin.globaltv.lat"
+            type: "wan"
+            builtIn: true
+            enabled: true
+        }
+    ]
+end function
+```
+
+Profiles are saved as JSON with `FormatJson()` and restored with `ParseJson()` via `GTV_SaveServerProfiles()` and `GTV_LoadServerProfiles()`.
+
+## Privacy considerations
+
+- Credentials (`username`, `password`) are stored as plaintext strings scoped to the `GlobalTV` registry section. They are not accessible to other Roku channels.
+- The registry is wiped when the channel is uninstalled from the device.
+- Users can force a logout — and thus credential deletion — at any time from the Settings screen.
+- No credentials are written to logs. The `IS_DEV_BUILD` flag controls debug output, but credential values are never printed even in debug mode.

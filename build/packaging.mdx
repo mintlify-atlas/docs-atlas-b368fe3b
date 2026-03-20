@@ -1,0 +1,132 @@
+---
+title: Create a signed package
+description: How to generate a signed .pkg file for submission to the Roku Channel Store.
+---
+
+Before submitting to the Roku Channel Store, you must produce a signed `.pkg` file. Signing binds the channel to a specific Roku device's signing key and is required by Roku for all channel submissions.
+
+## How it works
+
+The `make pkg` target:
+
+1. Builds `out/GlobalTV.zip` (runs `make zip`)
+2. Sideloads the zip to the Roku (runs `make install`)
+3. Posts a signing request to `/plugin_package` with your `SIGN_PASSWORD`
+4. Downloads the resulting `.pkg` file from the Roku to `out/`
+
+Output: `out/GlobalTV-1.0.6.pkg`
+
+## Prerequisites
+
+- Roku device in developer mode with a signing key loaded (see step 1 below)
+- `ROKU_IP`, `ROKU_PASS`, and `SIGN_PASSWORD` from the `genkey` command
+
+## Generate a signing key
+
+Each Roku device has a unique signing key. You generate it once using `genkey` over telnet. The resulting `SIGN_PASSWORD` must be saved — Roku does not let you recover it.
+
+<Steps>
+  <Step title="Connect to the Roku over telnet">
+    ```bash
+    telnet <ROKU_IP> 8080
+    ```
+
+    You should see a BrightScript debug prompt.
+
+    <Note>
+    `telnet` may not be installed by default. On macOS: `brew install telnet`. On Windows with Git Bash: `choco install telnet` or use PuTTY in raw mode on port 8080.
+    </Note>
+  </Step>
+
+  <Step title="Run genkey">
+    At the prompt, type:
+
+    ```text
+    genkey
+    ```
+
+    The Roku will generate a key and print output similar to:
+
+    ```text
+    Password: a1b2c3d4e5f6
+    DevID: 1A2B3C4D5E6F7890ABCDEF1234567890
+    ```
+  </Step>
+
+  <Step title="Save the DevID and password">
+    Copy both values to a secure location. The `Password` value is your `SIGN_PASSWORD`. The `DevID` identifies which device's key signed the package — Roku uses it to verify the submission.
+
+    <Warning>
+    There is no way to recover the `SIGN_PASSWORD` after this session. If you lose it, you must run `genkey` again, which generates a new key and invalidates any previously signed packages.
+    </Warning>
+  </Step>
+</Steps>
+
+## Build the signed package
+
+<Steps>
+  <Step title="Increment build_version in manifest">
+    Roku requires a unique `build_version` for every Channel Store submission. Open `manifest` and increment the value:
+
+    ```text
+    build_version=7
+    ```
+
+    Also update `APP_VERSION` in the Makefile if the minor or major version has changed, so the output filename stays consistent.
+
+    <Warning>
+    Submitting with the same `build_version` as a previous submission will be rejected by Roku.
+    </Warning>
+  </Step>
+
+  <Step title="Run make pkg">
+    ```bash
+    make pkg ROKU_IP=192.168.1.100 ROKU_PASS=yourpass SIGN_PASSWORD=a1b2c3d4e5f6
+    ```
+
+    Expected output:
+
+    ```text
+    >>> [pkg] Instalando app para firmar...
+    >>> [install] HTTP 200
+    >>> [install] Resultado: Install Success
+    >>> [pkg] Solicitando paquete firmado...
+    >>> [pkg] Descargando .pkg desde el Roku...
+
+    >>> [pkg] OK → out/GlobalTV-1.0.6.pkg
+    >>> [pkg] Listo para subir al Roku Channel Store.
+    ```
+  </Step>
+
+  <Step title="Verify the output file">
+    Confirm the file exists and is non-zero in size:
+
+    ```bash
+    ls -lh out/GlobalTV-1.0.6.pkg
+    ```
+  </Step>
+</Steps>
+
+## Upload to the Roku Channel Store
+
+<Steps>
+  <Step title="Log in to the Roku developer dashboard">
+    Go to [developer.roku.com](https://developer.roku.com) and sign in with your Roku developer account.
+  </Step>
+
+  <Step title="Open your channel and add a new version">
+    Navigate to your channel listing and select **Manage Channel → Add new version**.
+  </Step>
+
+  <Step title="Upload the .pkg file">
+    Upload `out/GlobalTV-1.0.6.pkg` when prompted. Fill in the required metadata (screenshots, descriptions, categories).
+  </Step>
+
+  <Step title="Submit for certification">
+    Once all required fields are complete, submit the channel for Roku's certification review. Run `make check` before submitting to catch common issues early.
+  </Step>
+</Steps>
+
+<Tip>
+Run `make check` before every Channel Store submission to verify manifest fields, required images, and prohibited patterns. See [Certification](/build/certification) for the full checklist.
+</Tip>

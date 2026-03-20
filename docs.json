@@ -1,122 +1,114 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "GlobalTV Roku",
+  "theme": "palm",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#2D57C1",
+    "light": "#4A7AE8",
+    "dark": "#1A3A8F"
   },
-  "favicon": "/favicon.svg",
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/gianfranco25-pro/GlobalTV_Roku"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/gianfranco25-pro/GlobalTV_Roku"
+    }
+  },
   "navigation": {
     "tabs": [
       {
-        "tab": "Guides",
+        "tab": "Documentation",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Get Started",
+            "pages": ["introduction", "quickstart", "requirements"]
+          },
+          {
+            "group": "Architecture",
+            "pages": ["architecture/overview", "architecture/app-flow", "architecture/global-state"]
+          },
+          {
+            "group": "Screens",
             "pages": [
-              "index",
-              "quickstart",
-              "development"
+              "screens/splash-screen",
+              "screens/onboarding-screen",
+              "screens/login-screen",
+              "screens/main-screen",
+              "screens/player-screen",
+              "screens/settings-screen"
             ]
           },
           {
-            "group": "Customization",
+            "group": "Subsystems",
             "pages": [
-              "essentials/settings",
-              "essentials/navigation"
+              "subsystems/auth",
+              "subsystems/playlist",
+              "subsystems/ads",
+              "subsystems/connectivity",
+              "subsystems/deep-linking",
+              "subsystems/logging"
             ]
           },
           {
-            "group": "Writing content",
-            "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
-            ]
+            "group": "Configuration",
+            "pages": ["configuration/manifest", "configuration/app-constants", "configuration/registry"]
           },
           {
-            "group": "AI tools",
-            "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
-            ]
+            "group": "Build & Deploy",
+            "pages": ["build/makefile-targets", "build/sideload", "build/packaging", "build/certification"]
           }
         ]
       },
       {
-        "tab": "API reference",
+        "tab": "Reference",
         "groups": [
           {
-            "group": "API documentation",
+            "group": "Tasks",
             "pages": [
-              "api-reference/introduction"
+              "reference/tasks/auth-task",
+              "reference/tasks/playlist-task",
+              "reference/tasks/ads-polling-task",
+              "reference/tasks/connectivity-task",
+              "reference/tasks/handshake-task",
+              "reference/tasks/metrics-task",
+              "reference/tasks/server-probe-task"
             ]
           },
           {
-            "group": "Endpoint examples",
+            "group": "Utilities",
             "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "reference/utils/logger",
+              "reference/utils/http-client",
+              "reference/utils/m3u-parser",
+              "reference/utils/registry-manager",
+              "reference/utils/server-manager",
+              "reference/utils/network-detector"
+            ]
+          },
+          {
+            "group": "Ad Formats",
+            "pages": [
+              "reference/ads/ad-manager",
+              "reference/ads/format-a",
+              "reference/ads/format-b",
+              "reference/ads/format-c"
+            ]
+          },
+          {
+            "group": "Overlays",
+            "pages": [
+              "reference/overlays/channel-banner",
+              "reference/overlays/number-overlay",
+              "reference/overlays/error-dialog",
+              "reference/overlays/offline-dialog"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
-    }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
-  },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
-    }
+    ]
   }
 }

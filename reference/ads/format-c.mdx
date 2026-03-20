@@ -1,0 +1,95 @@
+---
+title: AdFormatC
+description: Viewport-reduction ad that shrinks the video area to make room for a full-width banner.
+---
+
+`AdFormatC` is a SceneGraph `Group` component that displays a full-width banner **and** reduces the video playback area to prevent the banner from overlapping live content. It is the only ad format that directly emits `videoHeightReduction` and `videoOffsetY` fields to signal the required video resize to its parent.
+
+## Interface fields
+
+<ParamField body="adConfig" type="assocarray">
+  Configuration object built by `AdManager.BuildNodeConfig`. Triggers `onAdConfigChanged`.
+
+  | Key | Type | Default | Description |
+  |---|---|---|---|
+  | `media_url` | string | — | URL of the banner image |
+  | `position` | string | `"bottom"` | `top`, `top-left`, `top-right`, `bottom` *(default)*, `bottom-left`, or `bottom-right` |
+  | `width_percent` | float | `100.0` | Banner width as a percentage of the base viewport width |
+  | `height_percent` | float | `15.0` | Banner height as a percentage of the base viewport height |
+  | `fit_mode` | string | `"fit"` | `"fill"` maps to `scaleToFill`; anything else maps to `scaleToFit` |
+  | `viewport` | assocarray | design size | `{x, y, w, h}` of the base (full-screen) area |
+</ParamField>
+
+<ParamField body="imageLoaded" type="boolean" default="false">
+  Set to `true` once the Poster reports a `ready` load status. `AdManager` observes this to start the impression session.
+</ParamField>
+
+<ParamField body="imageError" type="boolean" default="false">
+  Set to `true` on a load failure. `AdManager` destroys the slot, and `videoHeightReduction` and `videoOffsetY` are reset to `0`.
+</ParamField>
+
+<ParamField body="videoHeightReduction" type="integer" default="0">
+  Pixel height consumed by this banner. Written during `onAdConfigChanged` and reset to `0` on error or fade-out completion.
+</ParamField>
+
+<ParamField body="videoOffsetY" type="integer" default="0">
+  Vertical pixel offset for the video origin. Non-zero only when the banner is positioned at the top. Reset to `0` on error or fade-out completion.
+</ParamField>
+
+## How it reduces the video viewport
+
+Format C uses the **base viewport** (full-screen area) rather than the live video viewport. The banner height is computed as a percentage of the base viewport height:
+
+```brightscript
+bannerH = Int(sh * hPct / 100.0)   ' default hPct = 15.0
+bannerW = Int(sw * wPct / 100.0)   ' default wPct = 100.0
+```
+
+Depending on position:
+
+- **Bottom** — banner is placed at `y = oy + sh - bannerH`. `videoOffsetY = 0`, `videoHeightReduction = bannerH`.
+- **Top** — banner is placed at `y = oy`. `videoOffsetY = bannerH`, `videoHeightReduction = bannerH`.
+
+`AdManager` then reads these values via `GetCReductionForSlot` and calls `RecomputeVideoReductionAndEmit` to aggregate reductions from both `c:top` and `c:bottom` slots. The total is clamped so the remaining video height never falls below 480 px.
+
+```brightscript
+' Inside AdFormatC.brs — bottom position example
+bannerY = oy + sh - bannerH
+m.top.videoOffsetY = 0
+m.top.videoHeightReduction = bannerH
+```
+
+## Visual behaviour
+
+Format C uses the same 50 ms fade timer as Formats A and B. On a successful image load the banner fades in over approximately 300 ms. When the slot is destroyed, `FadeOut` is called; once the opacity reaches `0.0`, both `videoHeightReduction` and `videoOffsetY` are reset to `0` so the video expands back to its original dimensions.
+
+<Warning>
+On image load failure, `videoHeightReduction` and `videoOffsetY` are immediately reset to `0` in the `OnLoadStatus` handler. This prevents the video area from remaining reduced when the ad image cannot be displayed.
+</Warning>
+
+## XML component definition
+
+```xml
+<component name="AdFormatC" extends="Group">
+    <interface>
+        <field id="adConfig"             type="assocarray" onChange="onAdConfigChanged" />
+        <field id="imageLoaded"          type="boolean"    value="0" />
+        <field id="imageError"           type="boolean"    value="0" />
+        <field id="videoHeightReduction" type="integer"   value="0" />
+        <field id="videoOffsetY"         type="integer"   value="0" />
+    </interface>
+    <children>
+        <Poster id="adPoster" loadDisplayMode="scaleToFit" visible="false" />
+        <Timer  id="fadeTimer" duration="0.05" repeat="true" />
+    </children>
+</component>
+```
+
+## Slot keys
+
+| Slot key | Position |
+|---|---|
+| `c:top` | Banner at the top of the screen; video pushed down |
+| `c:bottom` | Banner at the bottom of the screen; video height reduced from below |
+
+Both slots can be active simultaneously. `AdManager` aggregates their reductions and clamps the total against the 480 px minimum video height.

@@ -1,0 +1,241 @@
+---
+title: Registry manager
+description: Typed wrappers around the Roku registry for persisting credentials, server selection, channel index, and UI settings.
+---
+
+The registry manager provides read, write, and delete helpers that all operate within the `"GlobalTV"` registry section. Higher-level helpers handle credentials, server state, and UI preferences as typed values.
+
+## Registry section and keys
+
+All data is stored in the `GlobalTV` section of the Roku persistent registry (`roRegistrySection`).
+
+| Key constant             | Registry key         | Value type | Description                                |
+|--------------------------|----------------------|------------|--------------------------------------------||
+| `REG_KEY_USER`           | `username`           | String     | Authenticated username                     |
+| `REG_KEY_PASS`           | `password`           | String     | Authenticated password                     |
+| `REG_KEY_SERVER`         | `lastServer`         | String     | Last successfully used server base URL     |
+| `REG_KEY_CHANNEL`        | `lastChannelIndex`   | String     | Last viewed channel index (integer)        |
+| `REG_KEY_SAFE_MARGIN`    | `uiSafeMarginPct`    | String     | UI safe-area margin percentage (0–10)      |
+| `REG_KEY_SERVER_PROFILES`| `serverProfiles`     | String     | JSON-encoded array of server profile objects |
+
+---
+
+## Low-level functions
+
+### GTV_RegRead
+
+```brightscript
+function GTV_RegRead(key as String, defaultVal = "" as String) as String
+```
+
+Reads a value from the `GlobalTV` registry section.
+
+<ParamField path="key" type="String" required>
+  The registry key to read.
+</ParamField>
+
+<ParamField path="defaultVal" type="String">
+  Value returned when the key does not exist. Defaults to `""`.
+</ParamField>
+
+**Return value** — The stored string, or `defaultVal` if the key is absent.
+
+---
+
+### GTV_RegWrite
+
+```brightscript
+sub GTV_RegWrite(key as String, value as String)
+```
+
+Writes a value to the `GlobalTV` registry section and immediately calls `Flush()` to persist it to disk.
+
+<ParamField path="key" type="String" required>
+  The registry key to write.
+</ParamField>
+
+<ParamField path="value" type="String" required>
+  The string value to store.
+</ParamField>
+
+---
+
+### GTV_RegDelete
+
+```brightscript
+sub GTV_RegDelete(key as String)
+```
+
+Deletes a key from the `GlobalTV` registry section if it exists, then calls `Flush()`.
+
+<ParamField path="key" type="String" required>
+  The registry key to delete.
+</ParamField>
+
+---
+
+## Credential functions
+
+### GTV_RegHasCredentials
+
+```brightscript
+function GTV_RegHasCredentials() as Boolean
+```
+
+Returns `true` if both `username` and `password` keys are non-empty in the registry.
+
+---
+
+### GTV_RegLoadCredentials
+
+```brightscript
+function GTV_RegLoadCredentials() as Object
+```
+
+Loads stored credentials.
+
+**Return value** — An `roAssociativeArray` `{username: String, password: String}`, or `invalid` if either value is empty.
+
+**Example**
+
+```brightscript
+creds = GTV_RegLoadCredentials()
+if creds <> invalid
+    ' Proceed with auto-login
+    GTV_Log("Auth", "Resuming session for " + creds.username)
+end if
+```
+
+---
+
+### GTV_RegSaveCredentials
+
+```brightscript
+sub GTV_RegSaveCredentials(username as String, password as String)
+```
+
+Persists username and password to the registry.
+
+<ParamField path="username" type="String" required>
+  The username to store.
+</ParamField>
+
+<ParamField path="password" type="String" required>
+  The password to store.
+</ParamField>
+
+---
+
+### GTV_RegClearCredentials
+
+```brightscript
+sub GTV_RegClearCredentials()
+```
+
+Deletes both `username` and `password` keys from the registry. Use this on logout or auth failure.
+
+**Example**
+
+```brightscript
+' On logout
+GTV_RegClearCredentials()
+m.global.setField("authState", "logged_out")
+```
+
+---
+
+## Session cache functions
+
+### GTV_RegClearCache
+
+```brightscript
+sub GTV_RegClearCache()
+```
+
+Deletes the `lastServer` and `lastChannelIndex` keys. Call this when you want to force a fresh server probe and channel reset on the next launch.
+
+---
+
+### GTV_RegLoadLastServer
+
+```brightscript
+function GTV_RegLoadLastServer() as String
+```
+
+Reads the last-used server URL and passes it through `GTV_ServerNormalizeBaseUrl` before returning. Returns `""` if no server has been saved.
+
+---
+
+### GTV_RegSaveLastServer
+
+```brightscript
+sub GTV_RegSaveLastServer(serverUrl as String)
+```
+
+Normalizes `serverUrl` and writes it to the `lastServer` registry key.
+
+---
+
+### GTV_RegLoadLastChannelIndex
+
+```brightscript
+function GTV_RegLoadLastChannelIndex() as Integer
+```
+
+Returns the last-viewed channel index as an integer. Returns `0` if the key is absent.
+
+---
+
+### GTV_RegSaveLastChannelIndex
+
+```brightscript
+sub GTV_RegSaveLastChannelIndex(idx as Integer)
+```
+
+Stores the channel index as a string (`idx.ToStr()`).
+
+---
+
+## UI preference functions
+
+### GTV_RegLoadSafeMarginPct
+
+```brightscript
+function GTV_RegLoadSafeMarginPct() as Integer
+```
+
+Reads the UI safe-area margin percentage from the registry. Falls back to `GTV_GetSafeMarginPct()` (the `AppConstants` default) if the key is absent. The returned value is clamped to `UI_SAFE_MARGIN_MIN_PCT`–`UI_SAFE_MARGIN_MAX_PCT` (0–10).
+
+---
+
+### GTV_RegSaveSafeMarginPct
+
+```brightscript
+sub GTV_RegSaveSafeMarginPct(pct as Integer)
+```
+
+Clamps `pct` to the 0–10 range and writes it to the registry.
+
+<ParamField path="pct" type="Integer" required>
+  Desired safe-area margin as a whole-number percentage (0–10).
+</ParamField>
+
+---
+
+## Persistence model
+
+<Note>
+Every write calls `roRegistrySection.Flush()` immediately. There is no deferred batching — each `GTV_RegWrite` or `GTV_RegDelete` call is a synchronous disk operation.
+</Note>
+
+Credentials are stored as plain strings in the Roku registry. The registry is private to the channel and cleared when the channel is uninstalled from the device.
+
+```brightscript
+' Typical login flow
+GTV_RegSaveCredentials(username, password)
+GTV_RegSaveLastServer(activeServer)
+
+' Typical logout flow
+GTV_RegClearCredentials()
+GTV_RegClearCache()
+```

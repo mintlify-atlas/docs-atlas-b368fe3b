@@ -1,80 +1,161 @@
 ---
 title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+description: "Get the GlobalTV Roku app running on your device in minutes — from zero to a live sideloaded channel."
 ---
 
-## Get started in three steps
+<Steps>
+  <Step title="Verify prerequisites">
+    Before you begin, make sure the following tools are available on your machine:
 
-Get your documentation site running locally and make your first customization.
+    | Tool   | Purpose                                  |
+    | ------ | ---------------------------------------- |
+    | `make` | Runs build and deploy targets            |
+    | `zip`  | Packages the app into a Roku-compatible archive |
+    | `curl` | Uploads the ZIP to the Roku device       |
+    | `rm`, `grep`, `sed` | Used internally by the Makefile |
 
-### Step 1: Set up your local environment
+    Verify each tool is installed:
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+    ```bash
+    make --version
+    zip --version
+    curl --version
+    ```
 
-### Step 2: Deploy your changes
+    <Note>
+      On Windows, install these tools via [Chocolatey](https://chocolatey.org/) or use Git Bash, which includes `make`, `zip`, and `curl` out of the box.
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+      ```bash
+      choco install make zip curl
+      ```
+    </Note>
+  </Step>
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+  <Step title="Enable developer mode on your Roku">
+    Developer mode must be active on your Roku device before you can sideload apps.
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+    1. On your Roku remote, press the following sequence:
 
-### Step 3: Go live
+       **Home × 3 → Up × 2 → Right → Left → Right → Left → Right**
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+    2. A **Developer Settings** screen appears. Select **Enable Installer** and set a password.
+    3. Note the IP address shown on screen — you'll use it as `ROKU_IP` in later steps.
+
+    <Warning>
+      Your Roku must be on the same local network as your development machine. The sideload process uses the Roku's local HTTP server at `http://<ROKU_IP>/plugin_install`.
+    </Warning>
+  </Step>
+
+  <Step title="Get the project">
+    Clone or download the GlobalTV Roku repository to your machine:
+
+    ```bash
+    git clone https://github.com/gianfranco25-pro/GlobalTV_Roku.git
+    cd GlobalTV_Roku
+    ```
+
+    The project structure looks like this:
+
+    ```text
+    manifest              ← Channel metadata (version 1.0.6, splash, resolutions)
+    Makefile              ← All build and deploy targets
+    source/               ← BrightScript entry point and utilities
+    components/           ← SceneGraph screens, tasks, ads, overlays
+    images/               ← Icons and splash screen assets
+    out/                  ← Build output (created by make zip)
+    ```
+  </Step>
+
+  <Step title="Build the ZIP">
+    Package the app into a Roku-compatible ZIP archive:
+
+    ```bash
+    make zip
+    ```
+
+    Expected output:
+
+    ```text
+    >>> [zip] Empaquetando GlobalTV v1.0.6...
+    >>> [zip] OK → out/GlobalTV.zip
+    ```
+
+    The ZIP is created at `out/GlobalTV.zip`. It contains the `manifest`, `source/`, `components/`, and `images/` directories — with secrets, build artifacts, and editor files excluded automatically.
+  </Step>
+
+  <Step title="Sideload to your Roku">
+    Push the ZIP directly to your Roku device. Replace `x.x.x.x` with your Roku's IP address and `xxxx` with the developer password you set in step 2:
+
+    ```bash
+    make install ROKU_IP=x.x.x.x ROKU_PASS=xxxx
+    ```
+
+    The Makefile builds the ZIP first (if needed), then uploads it via HTTP:
+
+    ```text
+    >>> [install] Sideload en http://x.x.x.x...
+    >>> [install] HTTP 200
+    >>> [install] Resultado: Install Success
+    >>> [install] Listo. Revisar el Roku.
+    ```
+
+    The GlobalTV channel launches automatically on your Roku after a successful install.
+
+    <Note>
+      The full install response from the Roku is saved to `out/_install_response.html`. If installation fails, open that file in a browser for the detailed error from the Roku Developer Application Installer.
+    </Note>
+  </Step>
+
+  <Step title="Verify with make check">
+    Run the built-in certification checker to confirm the project is in good shape:
+
+    ```bash
+    make check
+    ```
+
+    Expected output:
+
+    ```text
+    >>> [check] Verificando manifest para certificación Roku 2026...
+
+      ✓ OK:    title=
+      ✓ OK:    major_version=
+      ✓ OK:    minor_version=
+      ✓ OK:    build_version=
+      ✓ OK:    mm_icon_focus_hd=
+      ✓ OK:    mm_icon_focus_fhd=
+      ✓ OK:    splash_screen_fhd=
+      ✓ OK:    splash_screen_hd=
+      ✓ OK:    splash_screen_sd=
+      ✓ OK:    ui_resolutions=fhd
+      ✓ OK:    rsg_version=1.2
+      ✓ OK:    supports_input_launch=1
+      ✓ OK:    splash_rsg_optimization=1
+      ✓ OK:    splash_color=
+      ✓ OK:    splash_min_time=
+
+      → manifest OK — todos los campos de certificación presentes.
+
+    >>> [check] COMPLETO.
+    ```
+
+    `make check` validates the manifest fields required for Roku certification, checks that required images exist, scans for prohibited patterns (`eval()`, `file://`), and confirms deep link and beacon requirements. Use it as a quick sanity check during development — it is not a substitute for Roku's official certification review.
+  </Step>
+</Steps>
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Requirements" icon="list-check" href="/requirements">
+    Full details on system, device, backend, and network requirements
+  </Card>
+  <Card title="Makefile targets" icon="hammer" href="/build/makefile-targets">
+    All available build, packaging, and screenshot targets
+  </Card>
+  <Card title="AppConstants" icon="sliders" href="/configuration/app-constants">
+    Configure endpoints, timeouts, and feature flags
+  </Card>
+  <Card title="Architecture overview" icon="sitemap" href="/architecture/overview">
+    Understand how screens, tasks, and state fit together
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

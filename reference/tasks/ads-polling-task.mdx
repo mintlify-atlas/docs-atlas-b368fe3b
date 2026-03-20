@@ -1,0 +1,179 @@
+---
+title: "AdsPollingTask"
+description: "Long-running background task that polls the ads API on an interval, normalises ad payloads, and signals session or account state changes."
+---
+
+`AdsPollingTask` runs `RunAdsPolling` as a persistent worker thread. After an optional ads handshake, it polls the active ads endpoint every `ADS_POLL_MS` milliseconds. The task can be interrupted by setting `control = "stop"` or by toggling `resetChannel` when the viewer switches channels.
+
+<Note>
+Unlike `AuthTask` and `PlaylistTask`, this task does **not** stop automatically. It loops until `control` is set to `"stop"` or the channel is closed.
+</Note>
+
+## XML component definition
+
+```xml AdsPollingTask.xml
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="AdsPollingTask" extends="Task">
+  <interface>
+    <!-- inputs -->
+    <field id="streamId"              type="string"     value="" />
+    <field id="streamPosition"        type="string"     value="" />
+    <field id="resetChannel"          type="boolean"    value="false"
+           onChange="onResetChannel" />
+    <!-- outputs -->
+    <field id="adData"                type="assocarray" />
+    <field id="adsSnapshot"           type="assocarray" />
+    <field id="adsCleared"            type="boolean"    value="false" />
+    <field id="clearedStreamPosition" type="string"     value="" />
+    <field id="clearedStreamId"       type="string"     value="" />
+    <field id="userInactive"          type="boolean"    value="false" />
+    <field id="userInactiveReason"    type="string"     value="" />
+    <field id="sessionInvalid"        type="boolean"    value="false" />
+    <field id="sessionInvalidReason"  type="string"     value="" />
+  </interface>
+  <task functionName="RunAdsPolling" />
+</component>
+```
+
+## Input fields
+
+<ParamField path="streamId" type="String">
+  External identifier of the current stream (channel). Used as the `stream_id` query parameter when `streamPosition` is not available. If both are empty the poll is skipped.
+</ParamField>
+
+<ParamField path="streamPosition" type="String">
+  Channel number of the currently playing stream (e.g. `"5"`). Used as the `stream_position` query parameter and takes priority over `streamId` when building poll params. If not set the task falls back to reading `m.global.currentChannelIndex` from the channel list.
+</ParamField>
+
+<ParamField path="resetChannel" type="Boolean">
+  Toggle to `true` to reset the `since_version` snapshot and trigger an immediate poll for the new channel. The task resets the field to `false` after processing.
+</ParamField>
+
+## Output fields
+
+<ParamField path="adData" type="AssocArray">
+  The normalised payload for the most recently received ad. Contains at minimum `media_url` and `format`. Additional fields (`ad_id`, `duration_ms`, layout hints) depend on the server response. Observe this field to render a new ad.
+</ParamField>
+
+<ParamField path="adsSnapshot" type="AssocArray">
+  Full snapshot object for the current poll cycle, including `version`, `ads` (array), `server_time`, `next_check_at`, and `stream` context.
+</ParamField>
+
+<ParamField path="adsCleared" type="Boolean">
+  Toggled `false → true` to signal that the current ad should be dismissed. Check `clearedStreamPosition` and `clearedStreamId` to confirm the cleared ad matches the current context.
+</ParamField>
+
+<ParamField path="clearedStreamPosition" type="String">
+  The `stream_position` value from the request that triggered the clear event.
+</ParamField>
+
+<ParamField path="clearedStreamId" type="String">
+  The `stream_id` value from the request that triggered the clear event.
+</ParamField>
+
+<ParamField path="userInactive" type="Boolean">
+  Toggled `false → true` when the server signals that the subscriber's account has been deactivated mid-session.
+</ParamField>
+
+<ParamField path="userInactiveReason" type="String">
+  Human-readable reason accompanying `userInactive`, sourced from the server payload (`user_inactive_reason`, `subscriberDisabledReason`, `reason`, or `message`).
+</ParamField>
+
+<ParamField path="sessionInvalid" type="Boolean">
+  Toggled `false → true` when the server returns a credential or password-change error during polling, indicating the session must be re-established.
+</ParamField>
+
+<ParamField path="sessionInvalidReason" type="String">
+  Localised message accompanying `sessionInvalid` (e.g. `"Tu contraseña cambió. Inicia sesión nuevamente."`).
+</ParamField>
+
+## Function flow
+
+<Steps>
+  <Step title="Ads handshake (optional)">
+    If `ADS_HANDSHAKE_ENABLED = true` and `ADS_USE_DEDICATED = true`, calls `TryAdsHandshake()` which POSTs device info and credentials to `ADS_API_BASE_URL + ADS_PATH_HANDSHAKE`. Failures are logged as warnings but do not stop the task.
+  </Step>
+  <Step title="Initial poll">
+    Calls `DoPollResult()` immediately before entering the wait loop, so ads are available as soon as the task starts.
+  </Step>
+  <Step title="Wait loop">
+    Waits up to `nextIntervalMs` (default `ADS_POLL_MS = 10 000` ms) on a message port. The port observes both `control` and `resetChannel`.
+  </Step>
+  <Step title="Handle control messages">
+    If `control = "stop"`, the task returns. If `resetChannel = true`, resets `since_version` to `""` and immediately polls for the new channel's ads.
+  </Step>
+  <Step title="DoPollResult">
+    Builds query params via `BuildAdsPollParams()` using `stream_position` (preferred) and/or `stream_id` plus the current `since_version`. Calls `ExecutePollWithPathFallback()` which tries `ADS_PATH_ACTIVE` and falls back to `ADS_PATH_ACTIVE_FALLBACK` on 404.
+  </Step>
+  <Step title="ProcessPollResult">
+    Interprets the HTTP response:
+    - **204** — no changes; keep current `since_version`
+    - **422 with `since_version` error** — resets `since_version` to force a full fetch
+    - **Non-200 with auth error** — emits `sessionInvalid` or `userInactive`
+    - **200 with valid JSON** — unwraps the response, normalises the ad list via `NormalizeAdsList()`, builds a snapshot, and writes `adData` and `adsSnapshot`
+    - **200 with `ads = []`** — emits `adsCleared`
+  </Step>
+  <Step title="Compute next interval">
+    If the response contains `next_check_at` (ISO 8601 or Unix timestamp), `GetNextInterval()` calculates the ms until that time, clamped to a minimum of 2 000 ms and the configured `ADS_POLL_MS`. Otherwise the fixed `ADS_POLL_MS` is used.
+  </Step>
+</Steps>
+
+## AppConstants values used
+
+| Constant | Value | Used for |
+|---|---|---|
+| `ADS_POLL_MS` | `10000` ms | Default polling interval |
+| `TIMEOUT_HTTP` | `12000` ms | HTTP timeout for each poll request |
+| `ADS_USE_DEDICATED` | `true` | Routes ad requests to `ADS_API_BASE_URL` instead of `activeServer` |
+| `ADS_API_BASE_URL` | `"https://ads.globaltv.lat/api/v1"` | Base URL for the dedicated ads server |
+| `ADS_PATH_ACTIVE` | `"/app/ads/active"` | Primary endpoint path for active ads |
+| `ADS_PATH_ACTIVE_FALLBACK` | `""` | Fallback path tried on 404 |
+| `ADS_PATH_HANDSHAKE` | `"/app/devices/handshake"` | Handshake endpoint on the ads server |
+| `ADS_HANDSHAKE_ENABLED` | `true` | Enables the initial ads handshake |
+| `ADS_FLOW_DIAG` | `false` | Enables verbose flow diagnostic logging |
+
+## Usage example
+
+```brightscript
+' Start the polling task when the player screen opens
+m.adsTask = CreateObject("roSGNode", "AdsPollingTask")
+m.adsTask.streamId       = m.currentChannel.id
+m.adsTask.streamPosition = m.currentChannel.number.ToStr()
+
+m.adsTask.observeFieldScoped("adData",        "OnAdData")
+m.adsTask.observeFieldScoped("adsCleared",    "OnAdsCleared")
+m.adsTask.observeFieldScoped("sessionInvalid", "OnSessionInvalid")
+m.adsTask.observeFieldScoped("userInactive",   "OnUserInactive")
+
+m.adsTask.control = "RUN"
+
+' When the viewer changes channel
+m.adsTask.streamId       = newChannel.id
+m.adsTask.streamPosition = newChannel.number.ToStr()
+m.adsTask.resetChannel   = true   ' triggers immediate re-poll
+
+' When the player screen closes
+m.adsTask.control = "stop"
+```
+
+<Warning>
+Always stop the task by setting `control = "stop"` before the player screen is destroyed. Leaving the task running without an owner causes memory leaks and unnecessary network traffic.
+</Warning>
+
+## Ad normalisation
+
+`NormalizeAdCandidate()` coerces vendor-specific field names into a consistent shape:
+
+<AccordionGroup>
+  <Accordion title="media_url resolution order">
+    `media_url` → `image_url` → `url` → `mediaUrl` → `media` → `image` → `creative.media_url` → `creative.url` → `creative.image_url`
+  </Accordion>
+  <Accordion title="format resolution order">
+    `format` (object or string) → `ad_format` → assembled from `type`, `position`, `width_percent`, `height_percent`, `fit_mode`
+  </Accordion>
+  <Accordion title="ad_id resolution order">
+    `ad_id` → `id`
+  </Accordion>
+</AccordionGroup>
+
+An ad candidate without a resolvable `media_url` is silently dropped.

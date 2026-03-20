@@ -1,0 +1,189 @@
+---
+title: Playlist
+description: How GlobalTV Roku fetches, parses, and stores the live channel list from an M3U/HLS playlist endpoint.
+---
+
+The playlist subsystem fetches a channel list from the backend, parses the M3U format, extracts categories, and stores the result in global state for use by the channel grid and player.
+
+## Endpoint
+
+The playlist is fetched from an authenticated endpoint that embeds credentials directly in the URL path:
+
+```text
+GET {server}/auth/{user}/{pass}/playlist/m3u8/hls
+```
+
+Defined in `AppConstants.brs`:
+
+```brightscript
+PATH_PLAYLIST_TPL: "/auth/{user}/{pass}/playlist/m3u8/hls"
+TIMEOUT_HTTP     : 12000
+RETRY_MAX        : 3
+```
+
+The request uses the general `TIMEOUT_HTTP` of 12,000 ms and retries up to `RETRY_MAX = 3` times on network errors (HTTP code `-1`). On a non-network HTTP error (any non-`-1` code), retries stop immediately.
+
+## Fetch flow
+
+```brightscript
+encUser = GTV_UrlEncode(username)
+encPass = GTV_UrlEncode(password)
+url     = server + "/auth/" + encUser + "/" + encPass + "/playlist/m3u8/hls"
+
+while retries < c.RETRY_MAX
+    resp = GTV_HttpGet(url, c.TIMEOUT_HTTP)
+    if resp.ok then exit while
+    if resp.code <> -1 then exit while  ' non-network error — stop retrying
+    ...
+    retries = retries + 1
+end while
+```
+
+On a network failure (`code = -1`), the task rotates through the server failover list before retrying.
+
+## M3U parsing
+
+The raw M3U body is passed to `GTV_ParseM3U()` in `source/utils/M3UParser.brs`.
+
+### EXTINF line format
+
+The parser reads each `#EXTINF` line and extracts the following attributes:
+
+| Attribute | Field | Notes |
+|---|---|---|
+| `tvg-id` | `ch.id` | Channel identifier |
+| `tvg-name` | `ch.name` | Display name; falls back to the comma-suffix |
+| `tvg-logo` | `ch.logo` | Logo URL |
+| `group-title` | `ch.group` | Category; defaults to `"General"` |
+| `channel-number` | `ch.number` | Required in strict mode |
+
+Example EXTINF line:
+
+```text
+#EXTINF:-1 tvg-id="101" tvg-name="Canal Uno" tvg-logo="https://example.com/logo.png" group-title="Noticias" channel-number="101",Canal Uno
+https://stream.example.com/101/index.m3u8
+```
+
+### Strict channel number mode
+
+`PARSER_STRICT_CHANNEL_NUMBER = true` is set in `AppConstants.brs`:
+
+```brightscript
+PARSER_STRICT_CHANNEL_NUMBER : true
+```
+
+With strict mode enabled, any channel that does not have a valid `channel-number` attribute (a positive integer) is **dropped** rather than being auto-numbered:
+
+```brightscript
+if not hasValidNumber
+    if strictMode
+        droppedMissingNumber = droppedMissingNumber + 1
+    else
+        ch.number = autoIndex + 1
+        hasValidNumber = true
+        fallbackAssigned = fallbackAssigned + 1
+    end if
+end if
+```
+
+<Warning>
+With strict mode on, channels missing a `channel-number` attribute are silently dropped. The parser logs the count as a warning: `event=parser_drop reason=missing_channel_number`.
+</Warning>
+
+Duplicate channel numbers are also dropped:
+
+```brightscript
+numKey = ch.number.ToStr()
+if seenNumbers.DoesExist(numKey)
+    droppedDuplicateNumber = droppedDuplicateNumber + 1
+else
+    seenNumbers[numKey] = true
+    ...
+    channels.Push(ch)
+end if
+```
+
+### Channel object structure
+
+Each entry in the resulting channel list is an associative array:
+
+```brightscript
+ch = {
+    id        : "",       ' tvg-id attribute
+    name      : "",       ' tvg-name or comma-suffix
+    logo      : "",       ' tvg-logo URL
+    group     : "General",' group-title attribute
+    number    : -1,       ' channel-number attribute (positive integer)
+    url       : "",       ' stream URL (normalized)
+    contentId : ""        ' set equal to ch.number.ToStr()
+}
+```
+
+`contentId` is set to the string representation of `ch.number` and is used for deep linking.
+
+### URL normalization
+
+`GTV_NormalizeChannelUrl()` handles non-standard scheme prefixes:
+
+| Input scheme | Normalized to |
+|---|---|
+| `hls://http://...` | `http://...` |
+| `hls://https://...` | `https://...` |
+| `hls://...` | `http://...` |
+| `hlss://...` | `https://...` |
+| anything else | unchanged |
+
+### Category extraction
+
+Categories are collected from the `group-title` attribute of each channel. A deduplicated list is built using a case-insensitive key:
+
+```brightscript
+catKey = LCase(ch.group)
+if not categories.DoesExist(catKey)
+    categories[catKey] = ch.group
+end if
+```
+
+The final `categories` array preserves the original casing of the first occurrence of each group name.
+
+### Channel sorting
+
+After parsing, `GTV_SortChannels()` performs an insertion sort on the channel list by `ch.number` in ascending order.
+
+## Parser warnings
+
+`PlaylistTask` logs three parser diagnostic counters at warn level:
+
+```brightscript
+if parsed.droppedMissingNumber > 0
+    GTV_Warn("PlaylistTask", "event=parser_drop reason=missing_channel_number count=" + parsed.droppedMissingNumber.ToStr())
+end if
+if parsed.droppedDuplicateNumber > 0
+    GTV_Warn("PlaylistTask", "event=parser_drop reason=duplicate_channel_number count=" + parsed.droppedDuplicateNumber.ToStr())
+end if
+if parsed.fallbackAssigned > 0
+    GTV_Warn("PlaylistTask", "event=parser_fallback reason=missing_channel_number count=" + parsed.fallbackAssigned.ToStr())
+end if
+```
+
+## Global state
+
+On success, `PlaylistTask` writes directly to global state:
+
+```brightscript
+m.global.channelList  = parsed.channels
+m.global.categories   = parsed.categories
+```
+
+The `result` object returned through the task interface also contains `channels` and `categories` arrays, which `MainScene` uses to start playback at the correct index.
+
+## Error handling
+
+Playlist failures are classified using the same `GTV_AuthClassifyFailure()` function used by auth. The same reason codes apply:
+
+| Reason | User message |
+|---|---|
+| `AUTH_REASON_PASSWORD_CHANGED` | Password changed — redirects to login |
+| `AUTH_REASON_INACTIVE` | Account inactive — shows session issue dialog |
+| `AUTH_REASON_CREDENTIALS` | Invalid credentials — redirects to login |
+| `AUTH_REASON_NETWORK_DOWN` | No internet connection |
