@@ -1,0 +1,129 @@
+{
+  "projectType": "frontend",
+  "projectName": "GlobalTV Roku",
+  "projectDescription": "A Roku SceneGraph channel app for live TV streaming, featuring user authentication, channel playlist loading, ad system, deep linking, and connectivity management.",
+  "theme": "palm",
+  "primaryColor": "#2D57C1",
+  "lightColor": "#1A1A2E",
+  "darkColor": "#0F1020",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": ["introduction", "quickstart", "requirements"]
+          },
+          {
+            "group": "Architecture",
+            "pages": ["architecture/overview", "architecture/app-flow", "architecture/global-state"]
+          },
+          {
+            "group": "Screens",
+            "pages": [
+              "screens/splash-screen",
+              "screens/onboarding-screen",
+              "screens/login-screen",
+              "screens/main-screen",
+              "screens/player-screen",
+              "screens/settings-screen"
+            ]
+          },
+          {
+            "group": "Subsystems",
+            "pages": [
+              "subsystems/auth",
+              "subsystems/playlist",
+              "subsystems/ads",
+              "subsystems/connectivity",
+              "subsystems/deep-linking",
+              "subsystems/logging"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": ["configuration/manifest", "configuration/app-constants", "configuration/registry"]
+          },
+          {
+            "group": "Build & Deploy",
+            "pages": ["build/makefile-targets", "build/sideload", "build/packaging", "build/certification"]
+          }
+        ]
+      },
+      {
+        "tab": "Reference",
+        "groups": [
+          {
+            "group": "Tasks",
+            "pages": [
+              "reference/tasks/auth-task",
+              "reference/tasks/playlist-task",
+              "reference/tasks/ads-polling-task",
+              "reference/tasks/connectivity-task",
+              "reference/tasks/handshake-task",
+              "reference/tasks/metrics-task",
+              "reference/tasks/server-probe-task"
+            ]
+          },
+          {
+            "group": "Utilities",
+            "pages": [
+              "reference/utils/logger",
+              "reference/utils/http-client",
+              "reference/utils/m3u-parser",
+              "reference/utils/registry-manager",
+              "reference/utils/server-manager",
+              "reference/utils/network-detector"
+            ]
+          },
+          {
+            "group": "Ad Formats",
+            "pages": [
+              "reference/ads/ad-manager",
+              "reference/ads/format-a",
+              "reference/ads/format-b",
+              "reference/ads/format-c"
+            ]
+          },
+          {
+            "group": "Overlays",
+            "pages": [
+              "reference/overlays/channel-banner",
+              "reference/overlays/number-overlay",
+              "reference/overlays/error-dialog",
+              "reference/overlays/offline-dialog"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Live TV channel streaming via M3U/HLS playlists",
+    "Splash screen and onboarding flow",
+    "On-device login with auto-login support",
+    "Channel grid with category browsing",
+    "Ad system with three display formats (A, B, C)",
+    "Deep link support for live media type",
+    "Connectivity polling and offline detection",
+    "Settings panel with server management and channel refresh",
+    "Roku Channel Store certification compliance",
+    "Makefile-based build, sideload and packaging workflow"
+  ],
+  "publicApiSurface": [
+    "make zip — Package the app into out/GlobalTV.zip",
+    "make install ROKU_IP=x.x.x.x ROKU_PASS=xxxx — Sideload to Roku device",
+    "make pkg ROKU_IP=x.x.x.x ROKU_PASS=xxxx SIGN_PASSWORD=xxxx — Generate signed .pkg",
+    "make screenshot ROKU_IP=x.x.x.x ROKU_PASS=xxxx — Capture device screenshot",
+    "make check — Verify Roku certification checklist",
+    "make clean — Remove build artifacts",
+    "AppConstants() — Central configuration object",
+    "GTV_InitGlobalState() — Initialize m.global state fields",
+    "GTV_Log() / GTV_Warn() / GTV_Error() — Logging functions",
+    "GTV_GetSafeArea(node) — Compute UI safe area",
+    "GTV_GetLayoutContext(node) — Compute scaled layout context",
+    "GTV_AuthClassifyFailure(httpCode, reasonText, bodyText, subscriberActive) — Classify auth errors",
+    "launchDeepLink / inputDeepLink — Deep link entry points (mediaType=live)"
+  ]
+}
